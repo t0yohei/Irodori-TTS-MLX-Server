@@ -83,6 +83,46 @@ def test_audio_speech_returns_complete_wav_bytes_from_runtime() -> None:
     ]
 
 
+def test_audio_speech_accepts_voicedesign_caption_no_reference_options() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "おはようございます",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "caption": "落ち着いたナレーション。明瞭で少し低めの声。",
+                "no_reference": True,
+                "preset": "balanced",
+                "cfg_scale_caption": 3.5,
+                "seconds": 2.0,
+                "seed": 1234,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests == [
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="おはようございます",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={
+                "caption": "落ち着いたナレーション。明瞭で少し低めの声。",
+                "no_reference": True,
+                "preset": "balanced",
+                "cfg_scale_caption": 3.5,
+                "seconds": 2.0,
+                "seed": 1234,
+            },
+        )
+    ]
+
+
 def test_falsey_runtime_injection_is_preserved() -> None:
     runtime = FalseyMockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).get("/v1/models")

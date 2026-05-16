@@ -160,6 +160,58 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
     )
 
 
+def test_mlx_runtime_manager_maps_voicedesign_preset_to_runtime_steps() -> None:
+    FakeMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"),
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={
+                "caption": "calm narration, clear diction",
+                "no_reference": True,
+                "preset": "balanced",
+                "cfg_scale_caption": 3.5,
+            },
+        )
+    )
+
+    request = FakeMLXRuntime.instances[0].requests[0]
+    assert request.caption == "calm narration, clear diction"
+    assert request.no_reference is True
+    assert request.reference_wav is None
+    assert request.num_steps == 24
+    assert request.cfg_scale_caption == 3.5
+
+
+def test_mlx_runtime_manager_lets_explicit_num_steps_override_preset() -> None:
+    FakeMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"),
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={"no_reference": True, "preset": "fast", "num_steps": 32},
+        )
+    )
+
+    assert FakeMLXRuntime.instances[0].requests[0].num_steps == 32
+
+
 def test_mlx_runtime_manager_synchronizes_lazy_runtime_initialization() -> None:
     FakeMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
@@ -254,6 +306,82 @@ def test_mlx_runtime_manager_rejects_conflicting_reference_options() -> None:
                 response_format="wav",
                 speed=1.0,
                 irodori={"reference_wav": "/tmp/ref.wav", "no_reference": True},
+            )
+        )
+
+
+def test_mlx_runtime_manager_rejects_no_reference_false_without_reference_wav() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"),
+        module_loader=fake_module_loader,
+    )
+
+    with pytest.raises(RuntimeRequestError, match="requires irodori.reference_wav"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="alloy",
+                response_format="wav",
+                speed=1.0,
+                irodori={"no_reference": False},
+            )
+        )
+
+
+def test_mlx_runtime_manager_rejects_invalid_voicedesign_preset() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"),
+        module_loader=fake_module_loader,
+    )
+
+    with pytest.raises(RuntimeRequestError, match="irodori.preset must be one of"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="voicedesign",
+                response_format="wav",
+                speed=1.0,
+                irodori={"no_reference": True, "preset": "draft"},
+            )
+        )
+
+
+def test_mlx_runtime_manager_rejects_invalid_caption_option_type() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"),
+        module_loader=fake_module_loader,
+    )
+
+    with pytest.raises(RuntimeRequestError, match="irodori.caption must be a string"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="voicedesign",
+                response_format="wav",
+                speed=1.0,
+                irodori={"no_reference": True, "caption": 123},
+            )
+        )
+
+
+def test_mlx_runtime_manager_rejects_invalid_cfg_timestep_range() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"),
+        module_loader=fake_module_loader,
+    )
+
+    with pytest.raises(RuntimeRequestError, match="irodori.cfg_min_t must be <= irodori.cfg_max_t"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="voicedesign",
+                response_format="wav",
+                speed=1.0,
+                irodori={"no_reference": True, "cfg_min_t": 0.9, "cfg_max_t": 0.1},
             )
         )
 
