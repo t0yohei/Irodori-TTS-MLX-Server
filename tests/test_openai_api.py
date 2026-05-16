@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from irodori_tts_mlx_server import create_app
 from irodori_tts_mlx_server.runtime import (
+    RuntimeRequestError,
     SpeechGenerationRequest,
     SpeechGenerationResult,
 )
@@ -16,6 +17,9 @@ class MockSpeechRuntime:
     def list_models(self) -> list[str]:
         return ["irodori-tts-mlx"]
 
+    def status_metadata(self) -> dict[str, object]:
+        return {"runtime": "mock", "configured": True, "loaded": True}
+
     def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
         self.requests.append(request)
         return SpeechGenerationResult(audio=b"RIFF....WAVEfmt ", media_type="audio/wav")
@@ -24,6 +28,11 @@ class MockSpeechRuntime:
 class FalseyMockSpeechRuntime(MockSpeechRuntime):
     def __len__(self) -> int:
         return 0
+
+
+class InvalidOptionsRuntime(MockSpeechRuntime):
+    def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
+        raise RuntimeRequestError("irodori.num_steps must be > 0.")
 
 
 def test_v1_models_returns_openai_compatible_model_list() -> None:
@@ -198,6 +207,27 @@ def test_audio_speech_rejects_unsupported_response_format() -> None:
         "type": "invalid_request_error",
         "param": "response_format",
         "code": "unsupported_response_format",
+    }
+
+
+def test_audio_speech_rejects_invalid_irodori_runtime_options() -> None:
+    response = TestClient(create_app(runtime=InvalidOptionsRuntime())).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+            "irodori": {"num_steps": 0},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "message": "irodori.num_steps must be > 0.",
+        "type": "invalid_request_error",
+        "param": "irodori",
+        "code": "invalid_irodori_options",
     }
 
 

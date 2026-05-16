@@ -11,10 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from irodori_tts_mlx_server.runtime import (
+    RuntimeRequestError,
     RuntimeUnavailableError,
     SpeechGenerationRequest,
     SpeechRuntime,
-    UnconfiguredSpeechRuntime,
+    create_default_runtime,
 )
 
 
@@ -52,7 +53,7 @@ class AudioSpeechRequest(BaseModel):
 
 
 def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
-    speech_runtime = runtime if runtime is not None else UnconfiguredSpeechRuntime()
+    speech_runtime = runtime if runtime is not None else create_default_runtime()
     app = FastAPI(title="Irodori-TTS-MLX Server", version="0.1.0")
 
     @app.exception_handler(HTTPException)
@@ -92,8 +93,8 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
         )
 
     @app.get("/health", tags=["health"])
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health() -> dict[str, Any]:
+        return {"status": "ok", "speech_runtime": speech_runtime.status_metadata()}
 
     @app.get("/v1/models", tags=["openai"])
     async def list_models() -> dict[str, Any]:
@@ -144,6 +145,13 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
         )
         try:
             result = await run_in_threadpool(speech_runtime.generate_speech, generation_request)
+        except RuntimeRequestError as exc:
+            raise openai_error(
+                str(exc),
+                status_code=400,
+                param="irodori",
+                code="invalid_irodori_options",
+            ) from exc
         except RuntimeUnavailableError as exc:
             raise openai_error(
                 str(exc),
