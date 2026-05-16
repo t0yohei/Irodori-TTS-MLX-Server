@@ -124,8 +124,11 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 ```
 
 Requests accept `model`, `input`, `voice`, `response_format`, `speed`, and
-an `irodori` options object. `response_format=wav` is supported for the MVP.
-Streaming responses are not supported and return an OpenAI-style error object.
+an `irodori` options object. `response_format=wav` and `response_format=pcm`
+work without optional encoders. `mp3`, `flac`, `opus`, and `aac` use FFmpeg
+when it is installed; otherwise the server returns an OpenAI-style error with
+setup guidance. Streaming responses are not supported and return an
+OpenAI-style error object.
 
 Supported `irodori` runtime options include `reference_wav`, `no_reference`,
 `caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,
