@@ -40,17 +40,17 @@ def test_cli_runtime_flags_configure_served_factory_app(monkeypatch) -> None:
     assert package_app_response.json()["speech_runtime"]["runtime"] == "unconfigured"
 
     main_module = importlib.import_module("irodori_tts_mlx_server.__main__")
-    app_module = importlib.import_module("irodori_tts_mlx_server.app")
+    factory_module = importlib.import_module("irodori_tts_mlx_server.factory")
     served_health = {}
 
     def fake_create_default_runtime() -> CapturedConfigRuntime:
         return CapturedConfigRuntime(runtime_config_from_env())
 
     def fake_uvicorn_run(app_target: str, **kwargs) -> None:
-        assert app_target == "irodori_tts_mlx_server.app:create_app"
+        assert app_target == "irodori_tts_mlx_server.factory:create_app"
         assert kwargs["factory"] is True
 
-        monkeypatch.setattr(app_module, "create_default_runtime", fake_create_default_runtime)
+        monkeypatch.setattr(factory_module, "create_default_runtime", fake_create_default_runtime)
         module_name, factory_name = app_target.split(":")
         factory = getattr(importlib.import_module(module_name), factory_name)
         response = TestClient(factory()).get("/health")

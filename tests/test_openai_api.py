@@ -92,7 +92,7 @@ def test_falsey_runtime_injection_is_preserved() -> None:
 
 
 def test_audio_speech_offloads_generation_to_threadpool(monkeypatch) -> None:
-    app_module = importlib.import_module("irodori_tts_mlx_server.app")
+    app_module = importlib.import_module("irodori_tts_mlx_server.factory")
     calls = []
 
     async def fake_run_in_threadpool(func, *args, **kwargs):
