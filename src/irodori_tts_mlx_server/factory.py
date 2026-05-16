@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+import asyncio
+import secrets
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -10,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from irodori_tts_mlx_server.config import ServerConfig, server_config_from_env
 from irodori_tts_mlx_server.audio import (
     AudioConversionError,
     convert_audio_response,
@@ -22,6 +26,12 @@ from irodori_tts_mlx_server.runtime import (
     SpeechRuntime,
     create_default_runtime,
 )
+
+
+class ServerConfigurationError(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 def openai_error(
@@ -57,8 +67,100 @@ class AudioSpeechRequest(BaseModel):
     stream: bool = False
 
 
-def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
+class SynthesisLimiter:
+    def __init__(self, *, max_concurrent: int, queue_timeout_seconds: float) -> None:
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._queue_timeout_seconds = queue_timeout_seconds
+
+    @asynccontextmanager
+    async def slot(self) -> AsyncIterator[None]:
+        try:
+            if self._queue_timeout_seconds == 0:
+                if self._semaphore.locked():
+                    raise TimeoutError
+                await self._semaphore.acquire()
+            else:
+                await asyncio.wait_for(
+                    self._semaphore.acquire(), timeout=self._queue_timeout_seconds
+                )
+        except TimeoutError as exc:
+            raise openai_error(
+                "Synthesis queue is full or the model is still loading; retry later.",
+                status_code=503,
+                error_type="server_error",
+                code="synthesis_queue_timeout",
+            ) from exc
+        try:
+            yield
+        finally:
+            self._semaphore.release()
+
+
+def _server_configuration_error(message: str) -> HTTPException:
+    return openai_error(
+        message,
+        status_code=503,
+        error_type="server_error",
+        code="server_configuration_error",
+    )
+
+
+def _resolve_server_config(config: ServerConfig | None) -> ServerConfig:
+    if config is not None:
+        return config
+    try:
+        return server_config_from_env()
+    except ValueError as exc:
+        raise ServerConfigurationError(str(exc)) from exc
+
+
+def _server_health_metadata(
+    config: ServerConfig, configuration_error: ServerConfigurationError | None
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "auth_enabled": config.auth_enabled,
+        "max_concurrent_synthesis": config.max_concurrent_synthesis,
+        "queue_timeout_seconds": config.queue_timeout_seconds,
+    }
+    if configuration_error is not None:
+        metadata.update(
+            {
+                "status": "configuration_error",
+                "error": {
+                    "code": "server_configuration_error",
+                    "message": configuration_error.message,
+                },
+            }
+        )
+    return metadata
+
+
+def _require_bearer_auth(config: ServerConfig, request: Request) -> None:
+    if not config.auth_enabled:
+        return
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not secrets.compare_digest(token, config.bearer_token or ""):
+        raise openai_error(
+            "Missing or invalid bearer token.",
+            status_code=401,
+            error_type="authentication_error",
+            code="invalid_api_key",
+        )
+
+
+def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None = None) -> FastAPI:
     speech_runtime = runtime if runtime is not None else create_default_runtime()
+    server_configuration_error: ServerConfigurationError | None = None
+    try:
+        server_config = _resolve_server_config(config)
+    except ServerConfigurationError as exc:
+        server_configuration_error = exc
+        server_config = ServerConfig()
+    synthesis_limiter = SynthesisLimiter(
+        max_concurrent=server_config.max_concurrent_synthesis,
+        queue_timeout_seconds=server_config.queue_timeout_seconds,
+    )
     app = FastAPI(title="Irodori-TTS-MLX Server", version="0.1.0")
 
     @app.exception_handler(HTTPException)
@@ -99,10 +201,17 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
 
     @app.get("/health", tags=["health"])
     async def health() -> dict[str, Any]:
-        return {"status": "ok", "speech_runtime": speech_runtime.status_metadata()}
+        return {
+            "status": "ok",
+            "speech_runtime": speech_runtime.status_metadata(),
+            "server": _server_health_metadata(server_config, server_configuration_error),
+        }
 
     @app.get("/v1/models", tags=["openai"])
-    async def list_models() -> dict[str, Any]:
+    async def list_models(api_request: Request) -> dict[str, Any]:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
+        _require_bearer_auth(server_config, api_request)
         return {
             "object": "list",
             "data": [
@@ -118,6 +227,9 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
 
     @app.post("/v1/audio/speech", tags=["openai"])
     async def create_speech(api_request: Request, request: AudioSpeechRequest) -> Response:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
+        _require_bearer_auth(server_config, api_request)
         if request.stream or "text/event-stream" in api_request.headers.get("accept", ""):
             raise openai_error(
                 "Streaming audio responses and SSE are not supported; request complete audio bytes.",
@@ -152,7 +264,8 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
             irodori=request.irodori,
         )
         try:
-            result = await run_in_threadpool(speech_runtime.generate_speech, generation_request)
+            async with synthesis_limiter.slot():
+                result = await run_in_threadpool(speech_runtime.generate_speech, generation_request)
         except RuntimeRequestError as exc:
             raise openai_error(
                 str(exc),

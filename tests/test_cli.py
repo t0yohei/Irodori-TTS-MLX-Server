@@ -71,6 +71,48 @@ def test_cli_runtime_flags_configure_served_factory_app(monkeypatch) -> None:
     }
 
 
+def test_server_control_env_configures_served_factory_app(monkeypatch) -> None:
+    monkeypatch.setenv("IRODORI_SERVER_BEARER_TOKEN", "local-secret")
+    monkeypatch.setenv("IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS", "2")
+    monkeypatch.setenv("IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS", "0.5")
+
+    main_module = importlib.import_module("irodori_tts_mlx_server.__main__")
+    factory_module = importlib.import_module("irodori_tts_mlx_server.factory")
+    served_health = {}
+    unauthorized_status = 0
+    authorized_status = 0
+
+    def fake_create_default_runtime() -> CapturedConfigRuntime:
+        return CapturedConfigRuntime(runtime_config_from_env())
+
+    def fake_uvicorn_run(app_target: str, **kwargs) -> None:
+        nonlocal unauthorized_status, authorized_status
+        assert app_target == "irodori_tts_mlx_server.factory:create_app"
+        assert kwargs["factory"] is True
+
+        monkeypatch.setattr(factory_module, "create_default_runtime", fake_create_default_runtime)
+        module_name, factory_name = app_target.split(":")
+        factory = getattr(importlib.import_module(module_name), factory_name)
+        client = TestClient(factory())
+        served_health.update(client.get("/health").json()["server"])
+        unauthorized_status = client.get("/v1/models").status_code
+        authorized_status = client.get(
+            "/v1/models", headers={"Authorization": "Bearer local-secret"}
+        ).status_code
+
+    monkeypatch.setattr(main_module.uvicorn, "run", fake_uvicorn_run)
+
+    main_module.main([])
+
+    assert served_health == {
+        "auth_enabled": True,
+        "max_concurrent_synthesis": 2,
+        "queue_timeout_seconds": 0.5,
+    }
+    assert unauthorized_status == 401
+    assert authorized_status == 200
+
+
 def test_cli_rejects_conflicting_weight_sources() -> None:
     main_module = importlib.import_module("irodori_tts_mlx_server.__main__")
 

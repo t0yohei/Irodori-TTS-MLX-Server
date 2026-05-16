@@ -14,3 +14,8 @@ def test_health_returns_ok() -> None:
         "loaded": False,
         "model_id": "irodori-tts-mlx",
     }
+    assert response.json()["server"] == {
+        "auth_enabled": False,
+        "max_concurrent_synthesis": 1,
+        "queue_timeout_seconds": 30.0,
+    }
