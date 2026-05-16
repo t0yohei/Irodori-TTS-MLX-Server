@@ -16,7 +16,7 @@ This scaffold includes the package bootstrap, local development workflow,
 
 The default runtime is import-safe without model weights. It lists the MVP model
 id but returns a clear `runtime_unavailable` error for speech generation until a
-real Irodori-TTS-MLX runtime adapter is configured.
+converted Irodori-TTS-MLX weights are configured.
 
 ## Local Development
 
@@ -50,8 +50,31 @@ curl http://127.0.0.1:8000/health
 Expected response:
 
 ```json
-{"status":"ok"}
+{"status":"ok","speech_runtime":{"runtime":"unconfigured","configured":false,"loaded":false,"model_id":"irodori-tts-mlx"}}
 ```
+
+Configure the real MLX runtime with either a hosted converted-weights layout:
+
+```bash
+python -m irodori_tts_mlx_server \
+  --weights-repo owner/irodori-tts-mlx-converted-weights \
+  --host 127.0.0.1 \
+  --port 8000
+```
+
+or local converted weights plus the matching model config:
+
+```bash
+python -m irodori_tts_mlx_server \
+  --weights /path/to/irodori-tts-mlx.npz \
+  --model-config-json /path/to/model_config.json
+```
+
+The same settings can be supplied through environment variables:
+`IRODORI_MLX_WEIGHTS_REPO`, `IRODORI_MLX_WEIGHTS_DIR`,
+`IRODORI_MLX_WEIGHTS_PATH`, and `IRODORI_MLX_MODEL_CONFIG_JSON`.
+`IRODORI_MLX_PRELOAD=1` loads the model during startup; otherwise loading is
+lazy on the first speech request.
 
 List OpenAI-compatible models:
 
@@ -71,6 +94,12 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 Requests accept `model`, `input`, `voice`, `response_format`, `speed`, and
 an `irodori` options object. `response_format=wav` is supported for the MVP.
 Streaming responses are not supported and return an OpenAI-style error object.
+
+Supported `irodori` runtime options include `reference_wav`, `no_reference`,
+`caption`, `seconds`, `duration_scale`, `num_steps`, `seed`, `cfg_scale_text`,
+`cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`, `cfg_min_t`,
+`cfg_max_t`, `max_reference_seconds`, and `no_context_kv_cache`. When
+`duration_scale` is omitted, OpenAI `speed` maps to `duration_scale=1/speed`.
 
 ## Validation
 
