@@ -12,6 +12,7 @@ from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     RuntimeUnavailableError,
     SpeechGenerationRequest,
+    concatenate_wav_audio,
     split_text_for_generation,
     create_default_runtime,
 )
@@ -257,6 +258,13 @@ def test_split_text_for_generation_prefers_punctuation_boundaries() -> None:
     ]
 
 
+def test_split_text_for_generation_preserves_spaces_between_punctuation_segments() -> None:
+    assert split_text_for_generation("one. two. three.", max_chars=10) == [
+        "one. two.",
+        "three.",
+    ]
+
+
 def test_split_text_for_generation_falls_back_to_hard_slices() -> None:
     assert split_text_for_generation("abcdefghijklmnopqrstuvwxyz", max_chars=10) == [
         "abcdefghij",
@@ -377,6 +385,11 @@ def test_mlx_runtime_manager_applies_tail_artifact_controls_per_chunk() -> None:
     )
 
     assert read_wav_samples(result.audio) == [5] * 20 + [0] * 2 + [5] * 20 + [0] * 2
+
+
+def test_concatenate_wav_audio_maps_empty_wav_bytes_to_runtime_unavailable() -> None:
+    with pytest.raises(RuntimeUnavailableError, match="invalid WAV audio"):
+        concatenate_wav_audio([b"", make_wav([1, 2, 3])])
 
 
 def test_mlx_runtime_manager_synchronizes_lazy_runtime_initialization() -> None:

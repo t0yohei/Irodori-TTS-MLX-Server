@@ -283,8 +283,9 @@ def split_text_for_generation(text: str, *, max_chars: int) -> list[str]:
         if not current:
             current = segment
             continue
-        if len(current) + len(segment) <= max_chars:
-            current += segment
+        separator = "" if current.endswith((" ", "\n")) or segment.startswith((" ", "\n")) else " "
+        if len(current) + len(separator) + len(segment) <= max_chars:
+            current += separator + segment
             continue
         chunks.extend(_split_overlong_segment(current, max_chars=max_chars))
         current = segment
@@ -395,7 +396,7 @@ def _read_wav_frames(audio: bytes) -> tuple[wave._wave_params, bytes]:
         with wave.open(BytesIO(audio), "rb") as wav_file:
             params = wav_file.getparams()
             return params, wav_file.readframes(params.nframes)
-    except wave.Error as exc:
+    except (EOFError, wave.Error) as exc:
         raise RuntimeUnavailableError(f"Irodori-TTS-MLX generated invalid WAV audio: {exc}") from exc
 
 
