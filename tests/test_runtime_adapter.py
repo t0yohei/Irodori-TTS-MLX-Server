@@ -70,6 +70,14 @@ class FakeMLXRuntime:
         return SimpleNamespace(output_wav=request.output_wav)
 
 
+class ValueErrorMLXRuntime:
+    def __init__(self, *, config: FakeRuntimeConfig) -> None:
+        self.config = config
+
+    def generate(self, request: FakeGenerationRequest) -> object:
+        raise ValueError("backend failed")
+
+
 def fake_module_loader():
     runtime_module = SimpleNamespace(
         DACVAEBridgeConfig=FakeCodecConfig,
@@ -177,6 +185,25 @@ def test_mlx_runtime_manager_synchronizes_lazy_runtime_initialization() -> None:
     assert results == [b"RIFFfakeWAVE"] * 4
     assert len(FakeMLXRuntime.instances) == 1
     assert len(FakeMLXRuntime.instances[0].requests) == 4
+
+
+def test_mlx_runtime_manager_treats_backend_value_error_as_unavailable() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"),
+        runtime_factory=ValueErrorMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+
+    with pytest.raises(RuntimeUnavailableError, match="backend failed"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="alloy",
+                response_format="wav",
+                speed=1.0,
+            )
+        )
 
 
 def test_mlx_runtime_manager_uses_hosted_weights_layout() -> None:

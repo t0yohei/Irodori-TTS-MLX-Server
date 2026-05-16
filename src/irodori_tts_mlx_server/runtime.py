@@ -274,14 +274,15 @@ class IrodoriMLXRuntimeManager:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as output_file:
             output_path = Path(output_file.name)
         try:
-            generation_request = self._build_generation_request(request, output_path)
+            try:
+                generation_request = self._build_generation_request(request, output_path)
+            except ValueError as exc:
+                raise RuntimeRequestError(str(exc)) from exc
             runtime.generate(generation_request)
             return SpeechGenerationResult(audio=output_path.read_bytes(), media_type="audio/wav")
         except RuntimeRequestError:
             raise
-        except ValueError as exc:
-            raise RuntimeRequestError(str(exc)) from exc
-        except (OSError, RuntimeError) as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             raise RuntimeUnavailableError(f"Irodori-TTS-MLX generation failed: {exc}") from exc
         finally:
             try:
