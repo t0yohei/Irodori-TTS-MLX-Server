@@ -156,7 +156,9 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
                 code="runtime_unavailable",
             ) from exc
         try:
-            converted_result = convert_audio_response(result, request.response_format)
+            converted_result = await run_in_threadpool(
+                convert_audio_response, result, request.response_format
+            )
         except AudioConversionError as exc:
             status_code = 400 if exc.code == "unsupported_response_format" else 503
             raise openai_error(

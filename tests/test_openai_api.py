@@ -103,7 +103,7 @@ def test_falsey_runtime_injection_is_preserved() -> None:
     assert response.json()["data"][0]["id"] == "irodori-tts-mlx"
 
 
-def test_audio_speech_offloads_generation_to_threadpool(monkeypatch) -> None:
+def test_audio_speech_offloads_generation_and_conversion_to_threadpool(monkeypatch) -> None:
     app_module = importlib.import_module("irodori_tts_mlx_server.factory")
     calls = []
 
@@ -124,8 +124,9 @@ def test_audio_speech_offloads_generation_to_threadpool(monkeypatch) -> None:
     )
 
     assert response.status_code == 200
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert calls[0][0] == runtime.generate_speech
+    assert calls[1][0] == app_module.convert_audio_response
 
 
 def test_audio_speech_rejects_streaming_requests() -> None:
