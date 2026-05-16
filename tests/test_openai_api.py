@@ -1,3 +1,5 @@
+import importlib
+
 from fastapi.testclient import TestClient
 
 from irodori_tts_mlx_server import create_app
@@ -17,6 +19,11 @@ class MockSpeechRuntime:
     def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
         self.requests.append(request)
         return SpeechGenerationResult(audio=b"RIFF....WAVEfmt ", media_type="audio/wav")
+
+
+class FalseyMockSpeechRuntime(MockSpeechRuntime):
+    def __len__(self) -> int:
+        return 0
 
 
 def test_v1_models_returns_openai_compatible_model_list() -> None:
@@ -65,6 +72,39 @@ def test_audio_speech_returns_complete_wav_bytes_from_runtime() -> None:
             irodori={"speaker_id": 1},
         )
     ]
+
+
+def test_falsey_runtime_injection_is_preserved() -> None:
+    runtime = FalseyMockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).get("/v1/models")
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["id"] == "irodori-tts-mlx"
+
+
+def test_audio_speech_offloads_generation_to_threadpool(monkeypatch) -> None:
+    app_module = importlib.import_module("irodori_tts_mlx_server.app")
+    calls = []
+
+    async def fake_run_in_threadpool(func, *args, **kwargs):
+        calls.append((func, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "run_in_threadpool", fake_run_in_threadpool)
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert calls[0][0] == runtime.generate_speech
 
 
 def test_audio_speech_rejects_streaming_requests() -> None:
@@ -152,9 +192,29 @@ def test_audio_speech_rejects_unsupported_response_format() -> None:
         },
     )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["type"] == "invalid_request_error"
-    assert response.json()["error"]["param"] == "response_format"
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "message": "Only response_format='wav' is supported by the current MVP runtime.",
+        "type": "invalid_request_error",
+        "param": "response_format",
+        "code": "unsupported_response_format",
+    }
+
+
+def test_audio_speech_preserves_openai_default_format_and_rejects_until_supported() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "unsupported_response_format"
+    assert runtime.requests == []
 
 
 def test_default_app_imports_without_model_weights_and_reports_runtime_unavailable() -> None:

@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from irodori_tts_mlx_server.runtime import (
     RuntimeUnavailableError,
@@ -44,14 +45,14 @@ class AudioSpeechRequest(BaseModel):
     model: str = Field(min_length=1)
     input: str = Field(min_length=1)
     voice: str = Field(min_length=1)
-    response_format: Literal["wav"] = "wav"
+    response_format: Literal["mp3", "wav"] = "mp3"
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
     irodori: dict[str, Any] = Field(default_factory=dict)
     stream: bool = False
 
 
 def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
-    speech_runtime = runtime or UnconfiguredSpeechRuntime()
+    speech_runtime = runtime if runtime is not None else UnconfiguredSpeechRuntime()
     app = FastAPI(title="Irodori-TTS-MLX Server", version="0.1.0")
 
     @app.exception_handler(HTTPException)
@@ -125,6 +126,13 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
                 param="model",
                 code="model_not_found",
             )
+        if request.response_format != "wav":
+            raise openai_error(
+                "Only response_format='wav' is supported by the current MVP runtime.",
+                status_code=400,
+                param="response_format",
+                code="unsupported_response_format",
+            )
 
         generation_request = SpeechGenerationRequest(
             model=request.model,
@@ -135,7 +143,7 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
             irodori=request.irodori,
         )
         try:
-            result = speech_runtime.generate_speech(generation_request)
+            result = await run_in_threadpool(speech_runtime.generate_speech, generation_request)
         except RuntimeUnavailableError as exc:
             raise openai_error(
                 str(exc),
