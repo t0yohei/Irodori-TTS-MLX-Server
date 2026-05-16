@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "irodori-tts-mlx-server"
+version = "0.1.0"
+description = "FastAPI server scaffold for Irodori-TTS-MLX."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2.0",
+  "httpx>=0.28.0",
+  "pytest>=8.0.0",
+  "ruff>=0.11.0",
+]
+
+[project.scripts]
+irodori-tts-mlx-server = "irodori_tts_mlx_server.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/irodori_tts_mlx_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
