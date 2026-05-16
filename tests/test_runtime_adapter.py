@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -148,6 +149,33 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
         max_reference_seconds=10.0,
         use_context_kv_cache=False,
     )
+
+
+def test_mlx_runtime_manager_synchronizes_lazy_runtime_initialization() -> None:
+    FakeMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"),
+        module_loader=fake_module_loader,
+    )
+
+    def generate() -> bytes:
+        result = manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="alloy",
+                response_format="wav",
+                speed=1.0,
+            )
+        )
+        return result.audio
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(lambda _index: generate(), range(4)))
+
+    assert results == [b"RIFFfakeWAVE"] * 4
+    assert len(FakeMLXRuntime.instances) == 1
+    assert len(FakeMLXRuntime.instances[0].requests) == 4
 
 
 def test_mlx_runtime_manager_uses_hosted_weights_layout() -> None:

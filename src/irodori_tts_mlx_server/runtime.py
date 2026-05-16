@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import os
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -213,6 +214,7 @@ class IrodoriMLXRuntimeManager:
         self._runtime_factory = runtime_factory
         self._module_loader = module_loader
         self._runtime: Any | None = None
+        self._runtime_lock = threading.Lock()
         self._load_error: str | None = None
         if config.preload:
             self._get_runtime()
@@ -258,17 +260,20 @@ class IrodoriMLXRuntimeManager:
     def _get_runtime(self) -> Any:
         if self._runtime is not None:
             return self._runtime
-        try:
-            self._runtime = self._build_runtime()
-        except RuntimeUnavailableError as exc:
-            self._load_error = str(exc)
-            raise
-        except (OSError, ValueError, RuntimeError) as exc:
-            message = f"Irodori-TTS-MLX runtime could not be loaded: {exc}"
-            self._load_error = message
-            raise RuntimeUnavailableError(message) from exc
-        self._load_error = None
-        return self._runtime
+        with self._runtime_lock:
+            if self._runtime is not None:
+                return self._runtime
+            try:
+                self._runtime = self._build_runtime()
+            except RuntimeUnavailableError as exc:
+                self._load_error = str(exc)
+                raise
+            except (OSError, ValueError, RuntimeError) as exc:
+                message = f"Irodori-TTS-MLX runtime could not be loaded: {exc}"
+                self._load_error = message
+                raise RuntimeUnavailableError(message) from exc
+            self._load_error = None
+            return self._runtime
 
     def _build_runtime(self) -> Any:
         runtime_module, resolve_weights_layout_source = self._module_loader()
