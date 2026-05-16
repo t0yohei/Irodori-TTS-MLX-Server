@@ -158,6 +158,63 @@ def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
     assert first_status == {"status_code": 200}
 
 
+def test_audio_speech_allows_zero_queue_timeout_when_slot_is_available() -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            config=ServerConfig(max_concurrent_synthesis=1, queue_timeout_seconds=0),
+        )
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.content == wav_bytes()
+    assert len(runtime.requests) == 1
+
+
+def test_audio_speech_zero_queue_timeout_rejects_when_queue_is_full() -> None:
+    runtime = BlockingSpeechRuntime()
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            config=ServerConfig(max_concurrent_synthesis=1, queue_timeout_seconds=0),
+        )
+    )
+    payload = {
+        "model": "irodori-tts-mlx",
+        "input": "hello",
+        "voice": "alloy",
+        "response_format": "wav",
+    }
+    first_status: dict[str, int] = {}
+
+    def first_request() -> None:
+        first_status["status_code"] = client.post("/v1/audio/speech", json=payload).status_code
+
+    thread = threading.Thread(target=first_request)
+    thread.start()
+    assert runtime.started.wait(timeout=2)
+    try:
+        response = client.post("/v1/audio/speech", json=payload)
+    finally:
+        runtime.release.set()
+        thread.join(timeout=2)
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "synthesis_queue_timeout"
+    assert first_status == {"status_code": 200}
+
+
 def test_audio_speech_allows_configured_concurrent_synthesis() -> None:
     class SleepingRuntime(MockSpeechRuntime):
         def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:

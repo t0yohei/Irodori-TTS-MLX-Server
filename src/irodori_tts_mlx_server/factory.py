@@ -75,7 +75,14 @@ class SynthesisLimiter:
     @asynccontextmanager
     async def slot(self) -> AsyncIterator[None]:
         try:
-            await asyncio.wait_for(self._semaphore.acquire(), timeout=self._queue_timeout_seconds)
+            if self._queue_timeout_seconds == 0:
+                if self._semaphore.locked():
+                    raise TimeoutError
+                await self._semaphore.acquire()
+            else:
+                await asyncio.wait_for(
+                    self._semaphore.acquire(), timeout=self._queue_timeout_seconds
+                )
         except TimeoutError as exc:
             raise openai_error(
                 "Synthesis queue is full or the model is still loading; retry later.",
