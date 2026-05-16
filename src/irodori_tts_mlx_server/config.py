@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -34,9 +35,12 @@ def _env_float(name: str, *, default: float) -> float:
     if value is None or value.strip() == "":
         return default
     try:
-        return float(value)
+        parsed_value = float(value)
     except ValueError as exc:
         raise ValueError(f"{name} must be a number.") from exc
+    if not math.isfinite(parsed_value):
+        raise ValueError(f"{name} must be a finite number.")
+    return parsed_value
 
 
 def server_config_from_env() -> ServerConfig:

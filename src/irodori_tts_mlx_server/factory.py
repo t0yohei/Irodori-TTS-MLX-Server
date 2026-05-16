@@ -28,6 +28,12 @@ from irodori_tts_mlx_server.runtime import (
 )
 
 
+class ServerConfigurationError(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 def openai_error(
     message: str,
     *,
@@ -83,18 +89,43 @@ class SynthesisLimiter:
             self._semaphore.release()
 
 
+def _server_configuration_error(message: str) -> HTTPException:
+    return openai_error(
+        message,
+        status_code=503,
+        error_type="server_error",
+        code="server_configuration_error",
+    )
+
+
 def _resolve_server_config(config: ServerConfig | None) -> ServerConfig:
     if config is not None:
         return config
     try:
         return server_config_from_env()
     except ValueError as exc:
-        raise openai_error(
-            str(exc),
-            status_code=503,
-            error_type="server_error",
-            code="server_configuration_error",
-        ) from exc
+        raise ServerConfigurationError(str(exc)) from exc
+
+
+def _server_health_metadata(
+    config: ServerConfig, configuration_error: ServerConfigurationError | None
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "auth_enabled": config.auth_enabled,
+        "max_concurrent_synthesis": config.max_concurrent_synthesis,
+        "queue_timeout_seconds": config.queue_timeout_seconds,
+    }
+    if configuration_error is not None:
+        metadata.update(
+            {
+                "status": "configuration_error",
+                "error": {
+                    "code": "server_configuration_error",
+                    "message": configuration_error.message,
+                },
+            }
+        )
+    return metadata
 
 
 def _require_bearer_auth(config: ServerConfig, request: Request) -> None:
@@ -113,7 +144,12 @@ def _require_bearer_auth(config: ServerConfig, request: Request) -> None:
 
 def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None = None) -> FastAPI:
     speech_runtime = runtime if runtime is not None else create_default_runtime()
-    server_config = _resolve_server_config(config)
+    server_configuration_error: ServerConfigurationError | None = None
+    try:
+        server_config = _resolve_server_config(config)
+    except ServerConfigurationError as exc:
+        server_configuration_error = exc
+        server_config = ServerConfig()
     synthesis_limiter = SynthesisLimiter(
         max_concurrent=server_config.max_concurrent_synthesis,
         queue_timeout_seconds=server_config.queue_timeout_seconds,
@@ -161,15 +197,13 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
         return {
             "status": "ok",
             "speech_runtime": speech_runtime.status_metadata(),
-            "server": {
-                "auth_enabled": server_config.auth_enabled,
-                "max_concurrent_synthesis": server_config.max_concurrent_synthesis,
-                "queue_timeout_seconds": server_config.queue_timeout_seconds,
-            },
+            "server": _server_health_metadata(server_config, server_configuration_error),
         }
 
     @app.get("/v1/models", tags=["openai"])
     async def list_models(api_request: Request) -> dict[str, Any]:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
         _require_bearer_auth(server_config, api_request)
         return {
             "object": "list",
@@ -186,6 +220,8 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
 
     @app.post("/v1/audio/speech", tags=["openai"])
     async def create_speech(api_request: Request, request: AudioSpeechRequest) -> Response:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
         _require_bearer_auth(server_config, api_request)
         if request.stream or "text/event-stream" in api_request.headers.get("accept", ""):
             raise openai_error(

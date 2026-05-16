@@ -4,10 +4,11 @@ import threading
 import time
 import wave
 
+import pytest
 from fastapi.testclient import TestClient
 
 from irodori_tts_mlx_server import create_app
-from irodori_tts_mlx_server.config import ServerConfig
+from irodori_tts_mlx_server.config import ServerConfig, server_config_from_env
 from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     SpeechGenerationRequest,
@@ -552,3 +553,38 @@ def test_default_app_reports_invalid_integer_env_as_runtime_unavailable(monkeypa
     assert speech_response.status_code == 503
     assert speech_response.json()["error"]["code"] == "runtime_unavailable"
     assert "IRODORI_MLX_TEXT_MAX_LENGTH" in speech_response.json()["error"]["message"]
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_server_config_rejects_non_finite_queue_timeout_env(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS", value)
+
+    with pytest.raises(ValueError, match="IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS"):
+        server_config_from_env()
+
+
+def test_invalid_server_env_keeps_health_available_and_blocks_openai_routes(monkeypatch) -> None:
+    monkeypatch.setenv("IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS", "nan")
+
+    client = TestClient(create_app(runtime=MockSpeechRuntime()))
+    health_response = client.get("/health")
+    models_response = client.get("/v1/models")
+
+    assert health_response.status_code == 200
+    assert health_response.json()["server"] == {
+        "auth_enabled": False,
+        "max_concurrent_synthesis": 1,
+        "queue_timeout_seconds": 30.0,
+        "status": "configuration_error",
+        "error": {
+            "code": "server_configuration_error",
+            "message": "IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS must be a finite number.",
+        },
+    }
+    assert models_response.status_code == 503
+    assert models_response.json()["error"] == {
+        "message": "IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS must be a finite number.",
+        "type": "server_error",
+        "param": None,
+        "code": "server_configuration_error",
+    }
