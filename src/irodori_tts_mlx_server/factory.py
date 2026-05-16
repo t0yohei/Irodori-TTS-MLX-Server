@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from irodori_tts_mlx_server.audio import (
     AudioConversionError,
     convert_audio_response,
+    ensure_response_format_available,
 )
 from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
@@ -131,6 +132,17 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
                 param="model",
                 code="model_not_found",
             )
+        try:
+            ensure_response_format_available(request.response_format)
+        except AudioConversionError as exc:
+            status_code = 400 if exc.code == "unsupported_response_format" else 503
+            raise openai_error(
+                str(exc),
+                status_code=status_code,
+                error_type="server_error" if status_code >= 500 else "invalid_request_error",
+                param="response_format",
+                code=exc.code,
+            ) from exc
         generation_request = SpeechGenerationRequest(
             model=request.model,
             input=request.input,

@@ -43,12 +43,7 @@ class AudioConversionError(RuntimeError):
 def convert_audio_response(
     result: SpeechGenerationResult, response_format: str
 ) -> SpeechGenerationResult:
-    if response_format not in SUPPORTED_RESPONSE_FORMATS:
-        raise AudioConversionError(
-            f"response_format '{response_format}' is not supported. Supported formats: "
-            f"{', '.join(SUPPORTED_RESPONSE_FORMATS)}.",
-            code="unsupported_response_format",
-        )
+    ensure_response_format_available(response_format)
     if response_format == "wav":
         return SpeechGenerationResult(audio=result.audio, media_type=MEDIA_TYPES["wav"])
     if response_format == "pcm":
@@ -57,6 +52,21 @@ def convert_audio_response(
         audio=_convert_with_ffmpeg(result.audio, response_format),
         media_type=MEDIA_TYPES[response_format],
     )
+
+
+def ensure_response_format_available(response_format: str) -> None:
+    if response_format not in SUPPORTED_RESPONSE_FORMATS:
+        raise AudioConversionError(
+            f"response_format '{response_format}' is not supported. Supported formats: "
+            f"{', '.join(SUPPORTED_RESPONSE_FORMATS)}.",
+            code="unsupported_response_format",
+        )
+    if response_format in FFMPEG_FORMATS and shutil.which("ffmpeg") is None:
+        raise AudioConversionError(
+            f"response_format='{response_format}' requires FFmpeg. Install FFmpeg or request "
+            "response_format='wav' or 'pcm'.",
+            code="response_format_unavailable",
+        )
 
 
 def _wav_to_pcm(wav_audio: bytes) -> bytes:
@@ -80,12 +90,7 @@ def _wav_to_pcm(wav_audio: bytes) -> bytes:
 
 def _convert_with_ffmpeg(wav_audio: bytes, response_format: str) -> bytes:
     ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path is None:
-        raise AudioConversionError(
-            f"response_format='{response_format}' requires FFmpeg. Install FFmpeg or request "
-            "response_format='wav' or 'pcm'.",
-            code="response_format_unavailable",
-        )
+    assert ffmpeg_path is not None
 
     suffix = f".{response_format}"
     with tempfile.TemporaryDirectory() as tmpdir:

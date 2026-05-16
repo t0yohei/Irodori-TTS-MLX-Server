@@ -271,7 +271,7 @@ def test_audio_speech_reports_missing_ffmpeg_for_compressed_default_format(monke
         "param": "response_format",
         "code": "response_format_unavailable",
     }
-    assert runtime.requests[0].response_format == "wav"
+    assert runtime.requests == []
 
 
 def test_audio_speech_rejects_invalid_irodori_runtime_options() -> None:
