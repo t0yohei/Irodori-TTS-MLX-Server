@@ -10,6 +10,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+PRESET_NUM_STEPS = {
+    "fast": 12,
+    "balanced": 24,
+    "quality": 40,
+}
+
 
 @dataclass(frozen=True)
 class SpeechGenerationRequest:
@@ -185,13 +191,26 @@ def _clean_option(options: dict[str, Any], key: str, *, default: Any = None) -> 
     return default if value == "" else value
 
 
+def _string_option(options: dict[str, Any], key: str, *, default: str | None = None) -> str | None:
+    value = _clean_option(options, key, default=default)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise RuntimeRequestError(f"irodori.{key} must be a string.")
+    return value
+
+
 def _bool_option(options: dict[str, Any], key: str, *, default: bool = False) -> bool:
     value = options.get(key, default)
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise RuntimeRequestError(f"irodori.{key} must be a boolean.")
 
 
 def _int_option(options: dict[str, Any], key: str, *, default: int, minimum: int = 1) -> int:
@@ -230,6 +249,15 @@ def _required_float_option(
     value = _float_option(options, key, default=default, positive=positive)
     assert value is not None
     return value
+
+
+def _num_steps_option(options: dict[str, Any]) -> int:
+    preset = _string_option(options, "preset")
+    if preset is not None and preset not in PRESET_NUM_STEPS:
+        choices = "', '".join(PRESET_NUM_STEPS)
+        raise RuntimeRequestError(f"irodori.preset must be one of '{choices}'.")
+    default = PRESET_NUM_STEPS[preset] if preset else 40
+    return _int_option(options, "num_steps", default=default)
 
 
 class IrodoriMLXRuntimeManager:
@@ -354,28 +382,34 @@ class IrodoriMLXRuntimeManager:
         options = dict(request.irodori)
         if request.response_format != "wav":
             raise RuntimeRequestError("Only wav output can be passed to the Irodori-TTS-MLX runtime.")
-        reference_wav = _clean_option(options, "reference_wav")
+        reference_wav = _string_option(options, "reference_wav")
         no_reference = _bool_option(options, "no_reference", default=reference_wav is None)
         if reference_wav and no_reference:
             raise RuntimeRequestError("irodori.reference_wav and irodori.no_reference=true cannot both be set.")
+        if not reference_wav and not no_reference:
+            raise RuntimeRequestError("irodori.no_reference=false requires irodori.reference_wav.")
         duration_scale = _float_option(options, "duration_scale", default=None)
         if duration_scale is None:
             duration_scale = 1.0 / request.speed
+        cfg_min_t = _required_float_option(options, "cfg_min_t", default=0.5, positive=False)
+        cfg_max_t = _required_float_option(options, "cfg_max_t", default=1.0, positive=False)
+        if cfg_min_t > cfg_max_t:
+            raise RuntimeRequestError("irodori.cfg_min_t must be <= irodori.cfg_max_t.")
         return runtime_module.GenerationRequest(
             text=request.input,
             output_wav=str(output_path),
             reference_wav=reference_wav,
             no_reference=no_reference,
-            caption=_clean_option(options, "caption"),
+            caption=_string_option(options, "caption"),
             seconds=_float_option(options, "seconds", default=None),
             duration_scale=duration_scale,
-            num_steps=_int_option(options, "num_steps", default=40),
+            num_steps=_num_steps_option(options),
             cfg_scale_text=_required_float_option(options, "cfg_scale_text", default=3.0),
             cfg_scale_caption=_required_float_option(options, "cfg_scale_caption", default=3.0),
             cfg_scale_speaker=_required_float_option(options, "cfg_scale_speaker", default=5.0),
-            cfg_guidance_mode=str(options.get("cfg_guidance_mode", "independent")),
-            cfg_min_t=_required_float_option(options, "cfg_min_t", default=0.5, positive=False),
-            cfg_max_t=_required_float_option(options, "cfg_max_t", default=1.0, positive=False),
+            cfg_guidance_mode=_string_option(options, "cfg_guidance_mode", default="independent") or "independent",
+            cfg_min_t=cfg_min_t,
+            cfg_max_t=cfg_max_t,
             seed=_int_option(options, "seed", default=0, minimum=0),
             max_reference_seconds=_float_option(options, "max_reference_seconds", default=30.0),
             use_context_kv_cache=not _bool_option(options, "no_context_kv_cache", default=False),

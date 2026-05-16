@@ -87,7 +87,7 @@ Generate WAV speech once a runtime adapter is configured:
 ```bash
 curl http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"irodori-tts-mlx","input":"hello","voice":"alloy","response_format":"wav"}' \
+  -d '{"model":"irodori-tts-mlx","input":"hello","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"calm narration, clear diction","preset":"balanced"}}' \
   --output speech.wav
 ```
 
@@ -96,10 +96,19 @@ an `irodori` options object. `response_format=wav` is supported for the MVP.
 Streaming responses are not supported and return an OpenAI-style error object.
 
 Supported `irodori` runtime options include `reference_wav`, `no_reference`,
-`caption`, `seconds`, `duration_scale`, `num_steps`, `seed`, `cfg_scale_text`,
-`cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`, `cfg_min_t`,
-`cfg_max_t`, `max_reference_seconds`, and `no_context_kv_cache`. When
-`duration_scale` is omitted, OpenAI `speed` maps to `duration_scale=1/speed`.
+`caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,
+`cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`,
+`cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, and `no_context_kv_cache`.
+When `duration_scale` is omitted, OpenAI `speed` maps to
+`duration_scale=1/speed`.
+
+For VoiceDesign v2 caption-conditioned hosted weights, set
+`irodori.no_reference=true` and provide a concise style caption such as
+`"calm narration, clear diction"` or `"bright young voice, energetic delivery"`.
+`irodori.preset` accepts `fast`, `balanced`, or `quality`, mapping to 12, 24, or
+40 sampling steps. An explicit `irodori.num_steps` overrides the preset. Do not
+set `irodori.reference_wav` together with `irodori.no_reference=true`; if
+`irodori.no_reference=false`, a `reference_wav` path is required.
 
 ## Validation
 
