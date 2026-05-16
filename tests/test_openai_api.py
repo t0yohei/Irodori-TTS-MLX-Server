@@ -135,6 +135,39 @@ def test_audio_speech_accepts_voicedesign_caption_no_reference_options() -> None
     ]
 
 
+def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello. goodbye.",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_reference": True,
+                "chunking": True,
+                "chunk_max_chars": 8,
+                "tail_trim_ms": 20,
+                "tail_silence_trim_ms": 120,
+                "tail_silence_keep_ms": 40,
+                "tail_silence_threshold": 512,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[0].irodori == {
+        "no_reference": True,
+        "chunking": True,
+        "chunk_max_chars": 8,
+        "tail_trim_ms": 20,
+        "tail_silence_trim_ms": 120,
+        "tail_silence_keep_ms": 40,
+        "tail_silence_threshold": 512,
+    }
+
+
 def test_falsey_runtime_injection_is_preserved() -> None:
     runtime = FalseyMockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).get("/v1/models")
