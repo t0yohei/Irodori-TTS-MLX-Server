@@ -265,3 +265,32 @@ def test_default_app_imports_without_model_weights_and_reports_runtime_unavailab
     assert models_response.status_code == 200
     assert speech_response.status_code == 503
     assert speech_response.json()["error"]["code"] == "runtime_unavailable"
+
+
+def test_default_app_reports_invalid_integer_env_as_runtime_unavailable(monkeypatch) -> None:
+    monkeypatch.setenv("IRODORI_MLX_WEIGHTS_REPO", "owner/repo")
+    monkeypatch.setenv("IRODORI_MLX_TEXT_MAX_LENGTH", "not-an-int")
+
+    client = TestClient(create_app())
+    health_response = client.get("/health")
+    speech_response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+        },
+    )
+
+    assert health_response.status_code == 200
+    assert health_response.json()["speech_runtime"] == {
+        "runtime": "configuration_error",
+        "configured": False,
+        "loaded": False,
+        "model_id": "irodori-tts-mlx",
+        "last_load_error": "IRODORI_MLX_TEXT_MAX_LENGTH must be an integer.",
+    }
+    assert speech_response.status_code == 503
+    assert speech_response.json()["error"]["code"] == "runtime_unavailable"
+    assert "IRODORI_MLX_TEXT_MAX_LENGTH" in speech_response.json()["error"]["message"]

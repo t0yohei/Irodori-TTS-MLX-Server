@@ -68,6 +68,29 @@ class UnconfiguredSpeechRuntime:
         )
 
 
+class InvalidConfigurationSpeechRuntime:
+    """Import-safe runtime placeholder used when environment configuration is invalid."""
+
+    def __init__(self, message: str, *, model_id: str = "irodori-tts-mlx") -> None:
+        self.message = message
+        self.model_id = model_id
+
+    def list_models(self) -> list[str]:
+        return [self.model_id]
+
+    def status_metadata(self) -> dict[str, Any]:
+        return {
+            "runtime": "configuration_error",
+            "configured": False,
+            "loaded": False,
+            "model_id": self.model_id,
+            "last_load_error": self.message,
+        }
+
+    def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
+        raise RuntimeUnavailableError(self.message)
+
+
 @dataclass(frozen=True)
 class IrodoriRuntimeConfig:
     """Configuration for the real Irodori-TTS-MLX runtime adapter."""
@@ -105,7 +128,10 @@ def _env_int(name: str, *, default: int | None = None) -> int | None:
     value = os.getenv(name)
     if value is None or value.strip() == "":
         return default
-    return int(value)
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeUnavailableError(f"{name} must be an integer.") from exc
 
 
 def runtime_config_from_env() -> IrodoriRuntimeConfig:
@@ -130,7 +156,10 @@ def runtime_config_from_env() -> IrodoriRuntimeConfig:
 
 
 def create_default_runtime(config: IrodoriRuntimeConfig | None = None) -> SpeechRuntime:
-    runtime_config = config or runtime_config_from_env()
+    try:
+        runtime_config = config or runtime_config_from_env()
+    except RuntimeUnavailableError as exc:
+        return InvalidConfigurationSpeechRuntime(str(exc))
     if not runtime_config.configured:
         return UnconfiguredSpeechRuntime()
     return IrodoriMLXRuntimeManager(runtime_config)
