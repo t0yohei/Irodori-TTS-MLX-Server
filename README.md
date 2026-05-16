@@ -1,13 +1,18 @@
 # Irodori-TTS-MLX-Server
 
-FastAPI server package for exposing Irodori-TTS-MLX through an HTTP API.
+OpenAI-compatible local TTS server for
+[Irodori-TTS-MLX](https://github.com/t0yohei/Irodori-TTS-MLX).
 
-This initial scaffold intentionally includes only the package bootstrap, local
-development workflow, and `GET /health`. Model listing, speech generation,
-runtime adapters, authentication, and audio conversion are tracked in later MVP
-issues.
+The initial implementation is intentionally scoped to a small MVP: expose
+`POST /v1/audio/speech` for VoiceDesign v2 no-reference/caption generation
+through an MLX-backed runtime. See [docs/mvp_scope.md](docs/mvp_scope.md) for
+the current API target, non-goals, and follow-up implementation boundaries.
 
-## Local development
+This scaffold currently includes the package bootstrap, local development
+workflow, and `GET /health`. Model listing, speech generation, runtime adapters,
+authentication, and audio conversion are tracked in later MVP issues.
+
+## Local Development
 
 Create a virtual environment and install the package with development tools:
 
