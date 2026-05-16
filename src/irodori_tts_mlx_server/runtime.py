@@ -162,7 +162,10 @@ def create_default_runtime(config: IrodoriRuntimeConfig | None = None) -> Speech
         return InvalidConfigurationSpeechRuntime(str(exc))
     if not runtime_config.configured:
         return UnconfiguredSpeechRuntime()
-    return IrodoriMLXRuntimeManager(runtime_config)
+    try:
+        return IrodoriMLXRuntimeManager(runtime_config)
+    except RuntimeUnavailableError as exc:
+        return InvalidConfigurationSpeechRuntime(str(exc), model_id=runtime_config.model_id)
 
 
 def _import_runtime_modules() -> tuple[Any, Callable[..., Any]]:

@@ -10,6 +10,7 @@ from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     RuntimeUnavailableError,
     SpeechGenerationRequest,
+    create_default_runtime,
 )
 
 
@@ -250,3 +251,37 @@ def test_mlx_runtime_manager_reports_missing_dependencies_clearly() -> None:
             )
         )
     assert "runtime dependencies are not installed" in manager.status_metadata()["last_load_error"]
+
+
+def test_create_default_runtime_reports_preload_failure_as_configuration_error(monkeypatch) -> None:
+    import irodori_tts_mlx_server.runtime as runtime_module
+
+    class FailingRuntimeManager:
+        def __init__(self, config: IrodoriRuntimeConfig) -> None:
+            assert config.preload is True
+            raise RuntimeUnavailableError("preload failed")
+
+    monkeypatch.setattr(runtime_module, "IrodoriMLXRuntimeManager", FailingRuntimeManager)
+
+    runtime = create_default_runtime(
+        IrodoriRuntimeConfig(model_id="custom-model", weights_repo="owner/repo", preload=True)
+    )
+
+    assert runtime.list_models() == ["custom-model"]
+    assert runtime.status_metadata() == {
+        "runtime": "configuration_error",
+        "configured": False,
+        "loaded": False,
+        "model_id": "custom-model",
+        "last_load_error": "preload failed",
+    }
+    with pytest.raises(RuntimeUnavailableError, match="preload failed"):
+        runtime.generate_speech(
+            SpeechGenerationRequest(
+                model="custom-model",
+                input="hello",
+                voice="alloy",
+                response_format="wav",
+                speed=1.0,
+            )
+        )
