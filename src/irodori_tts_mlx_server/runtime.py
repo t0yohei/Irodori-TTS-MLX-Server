@@ -6,7 +6,10 @@ import importlib
 import os
 import tempfile
 import threading
+import wave
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -15,6 +18,11 @@ PRESET_NUM_STEPS = {
     "balanced": 24,
     "quality": 40,
 }
+DEFAULT_TAIL_TRIM_MS = 0
+DEFAULT_TAIL_SILENCE_TRIM_MS = 0
+DEFAULT_TAIL_SILENCE_KEEP_MS = 40
+DEFAULT_TAIL_SILENCE_THRESHOLD = 256
+WAV_MEDIA_TYPE = "audio/wav"
 
 
 @dataclass(frozen=True)
@@ -260,6 +268,177 @@ def _num_steps_option(options: dict[str, Any]) -> int:
     return _int_option(options, "num_steps", default=default)
 
 
+def split_text_for_generation(text: str, *, max_chars: int) -> list[str]:
+    """Split long text on natural boundaries before falling back to hard slices."""
+
+    if max_chars < 1:
+        raise RuntimeRequestError("irodori.chunk_max_chars must be >= 1.")
+    stripped = text.strip()
+    if len(stripped) <= max_chars:
+        return [stripped]
+
+    chunks: list[str] = []
+    current = ""
+    for segment in _iter_punctuation_segments(stripped):
+        if not current:
+            current = segment
+            continue
+        if len(current) + len(segment) <= max_chars:
+            current += segment
+            continue
+        chunks.extend(_split_overlong_segment(current, max_chars=max_chars))
+        current = segment
+    if current:
+        chunks.extend(_split_overlong_segment(current, max_chars=max_chars))
+    return [chunk for chunk in chunks if chunk]
+
+
+def _iter_punctuation_segments(text: str) -> list[str]:
+    break_chars = set("。．.!！？?、，,;；:\n")
+    segments: list[str] = []
+    start = 0
+    for index, char in enumerate(text):
+        if char in break_chars:
+            end = index + 1
+            segment = text[start:end].strip()
+            if segment:
+                segments.append(segment)
+            start = end
+    tail = text[start:].strip()
+    if tail:
+        segments.append(tail)
+    return segments
+
+
+def _split_overlong_segment(text: str, *, max_chars: int) -> list[str]:
+    if len(text) <= max_chars:
+        return [text.strip()]
+    chunks: list[str] = []
+    remaining = text.strip()
+    while len(remaining) > max_chars:
+        split_at = remaining.rfind(" ", 0, max_chars + 1)
+        if split_at <= 0:
+            split_at = max_chars
+        chunks.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+@dataclass(frozen=True)
+class TailArtifactOptions:
+    trim_ms: int = DEFAULT_TAIL_TRIM_MS
+    silence_trim_ms: int = DEFAULT_TAIL_SILENCE_TRIM_MS
+    silence_keep_ms: int = DEFAULT_TAIL_SILENCE_KEEP_MS
+    silence_threshold: int = DEFAULT_TAIL_SILENCE_THRESHOLD
+
+
+def parse_tail_artifact_options(options: dict[str, Any]) -> TailArtifactOptions:
+    trim_ms = _int_option(options, "tail_trim_ms", default=DEFAULT_TAIL_TRIM_MS, minimum=0)
+    silence_trim_ms = _int_option(
+        options, "tail_silence_trim_ms", default=DEFAULT_TAIL_SILENCE_TRIM_MS, minimum=0
+    )
+    silence_keep_ms = _int_option(
+        options, "tail_silence_keep_ms", default=DEFAULT_TAIL_SILENCE_KEEP_MS, minimum=0
+    )
+    silence_threshold = _int_option(
+        options,
+        "tail_silence_threshold",
+        default=DEFAULT_TAIL_SILENCE_THRESHOLD,
+        minimum=0,
+    )
+    return TailArtifactOptions(
+        trim_ms=trim_ms,
+        silence_trim_ms=silence_trim_ms,
+        silence_keep_ms=silence_keep_ms,
+        silence_threshold=silence_threshold,
+    )
+
+
+def process_wav_tail(audio: bytes, options: TailArtifactOptions) -> bytes:
+    if options.trim_ms == 0 and options.silence_trim_ms == 0:
+        return audio
+    params, frames = _read_wav_frames(audio)
+    frame_width = params.sampwidth * params.nchannels
+    trim_frames = min(params.nframes, _ms_to_frames(options.trim_ms, framerate=params.framerate))
+    if trim_frames:
+        frames = frames[: -(trim_frames * frame_width)]
+    if options.silence_trim_ms:
+        frames = _trim_trailing_silence(
+            frames,
+            params=params,
+            minimum_silence_frames=_ms_to_frames(options.silence_trim_ms, framerate=params.framerate),
+            keep_silence_frames=_ms_to_frames(options.silence_keep_ms, framerate=params.framerate),
+            threshold=options.silence_threshold,
+        )
+    return _write_wav_frames(params, frames)
+
+
+def concatenate_wav_audio(parts: Sequence[bytes]) -> bytes:
+    if not parts:
+        raise RuntimeUnavailableError("Irodori-TTS-MLX generation produced no audio chunks.")
+    if len(parts) == 1:
+        return parts[0]
+    first_params, first_frames = _read_wav_frames(parts[0])
+    frames = [first_frames]
+    for part in parts[1:]:
+        params, chunk_frames = _read_wav_frames(part)
+        if params[:3] != first_params[:3] or params.framerate != first_params.framerate:
+            raise RuntimeUnavailableError("Generated WAV chunks have incompatible audio parameters.")
+        frames.append(chunk_frames)
+    return _write_wav_frames(first_params, b"".join(frames))
+
+
+def _read_wav_frames(audio: bytes) -> tuple[wave._wave_params, bytes]:
+    try:
+        with wave.open(BytesIO(audio), "rb") as wav_file:
+            params = wav_file.getparams()
+            return params, wav_file.readframes(params.nframes)
+    except wave.Error as exc:
+        raise RuntimeUnavailableError(f"Irodori-TTS-MLX generated invalid WAV audio: {exc}") from exc
+
+
+def _write_wav_frames(params: wave._wave_params, frames: bytes) -> bytes:
+    output = BytesIO()
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setparams(params)
+        wav_file.writeframes(frames)
+    return output.getvalue()
+
+
+def _ms_to_frames(milliseconds: int, *, framerate: int) -> int:
+    return round(framerate * milliseconds / 1000)
+
+
+def _trim_trailing_silence(
+    frames: bytes,
+    *,
+    params: wave._wave_params,
+    minimum_silence_frames: int,
+    keep_silence_frames: int,
+    threshold: int,
+) -> bytes:
+    if params.sampwidth != 2 or minimum_silence_frames <= 0:
+        return frames
+    frame_width = params.sampwidth * params.nchannels
+    trailing_silent_frames = 0
+    for frame_start in range(len(frames) - frame_width, -1, -frame_width):
+        frame = frames[frame_start : frame_start + frame_width]
+        samples = [
+            int.from_bytes(frame[index : index + params.sampwidth], "little", signed=True)
+            for index in range(0, len(frame), params.sampwidth)
+        ]
+        if all(abs(sample) <= threshold for sample in samples):
+            trailing_silent_frames += 1
+            continue
+        break
+    if trailing_silent_frames < minimum_silence_frames:
+        return frames
+    remove_frames = max(0, trailing_silent_frames - keep_silence_frames)
+    return frames[: -(remove_frames * frame_width)] if remove_frames else frames
+
+
 class IrodoriMLXRuntimeManager:
     """Lazy, cacheable adapter from server requests to Irodori-TTS-MLX generation."""
 
@@ -299,6 +478,28 @@ class IrodoriMLXRuntimeManager:
 
     def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
         runtime = self._get_runtime()
+        options = dict(request.irodori)
+        chunks = self._split_request_text(request, options)
+        chunk_seconds = self._chunk_seconds(options, chunks)
+        tail_options = parse_tail_artifact_options(options)
+        audio_chunks: list[bytes] = []
+        for chunk_index, chunk in enumerate(chunks):
+            chunk_irodori = dict(request.irodori)
+            chunk_irodori["seconds"] = chunk_seconds[chunk_index]
+            chunk_request = SpeechGenerationRequest(
+                model=request.model,
+                input=chunk,
+                voice=request.voice,
+                response_format=request.response_format,
+                speed=request.speed,
+                irodori=chunk_irodori,
+            )
+            audio_chunks.append(
+                process_wav_tail(self._generate_single_chunk(runtime, chunk_request), tail_options)
+            )
+        return SpeechGenerationResult(audio=concatenate_wav_audio(audio_chunks), media_type=WAV_MEDIA_TYPE)
+
+    def _generate_single_chunk(self, runtime: Any, request: SpeechGenerationRequest) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as output_file:
             output_path = Path(output_file.name)
         try:
@@ -307,7 +508,7 @@ class IrodoriMLXRuntimeManager:
             except ValueError as exc:
                 raise RuntimeRequestError(str(exc)) from exc
             runtime.generate(generation_request)
-            return SpeechGenerationResult(audio=output_path.read_bytes(), media_type="audio/wav")
+            return output_path.read_bytes()
         except RuntimeRequestError:
             raise
         except (OSError, RuntimeError, ValueError) as exc:
@@ -317,6 +518,31 @@ class IrodoriMLXRuntimeManager:
                 output_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+    def _split_request_text(self, request: SpeechGenerationRequest, options: dict[str, Any]) -> list[str]:
+        chunking = _bool_option(options, "chunking", default=True)
+        if not chunking:
+            return [request.input]
+        chunk_max_chars = _int_option(
+            options, "chunk_max_chars", default=self.config.text_max_length, minimum=1
+        )
+        return split_text_for_generation(request.input, max_chars=chunk_max_chars)
+
+    def _chunk_seconds(self, options: dict[str, Any], chunks: list[str]) -> list[float | None]:
+        seconds = _float_option(options, "seconds", default=None)
+        if seconds is None:
+            return [None] * len(chunks)
+        total_chars = sum(len(chunk) for chunk in chunks)
+        if len(chunks) == 1 or total_chars == 0:
+            return [seconds]
+        remaining = seconds
+        chunk_seconds: list[float] = []
+        for chunk in chunks[:-1]:
+            value = seconds * len(chunk) / total_chars
+            chunk_seconds.append(value)
+            remaining -= value
+        chunk_seconds.append(remaining)
+        return chunk_seconds
 
     def _get_runtime(self) -> Any:
         if self._runtime is not None:

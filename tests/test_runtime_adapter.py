@@ -1,6 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from io import BytesIO
 from types import SimpleNamespace
+import wave
 
 import pytest
 
@@ -10,6 +12,7 @@ from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     RuntimeUnavailableError,
     SpeechGenerationRequest,
+    split_text_for_generation,
     create_default_runtime,
 )
 
@@ -70,6 +73,21 @@ class FakeMLXRuntime:
         return SimpleNamespace(output_wav=request.output_wav)
 
 
+class WaveMLXRuntime:
+    instances: list["WaveMLXRuntime"] = []
+
+    def __init__(self, *, config: FakeRuntimeConfig) -> None:
+        self.config = config
+        self.requests: list[FakeGenerationRequest] = []
+        WaveMLXRuntime.instances.append(self)
+
+    def generate(self, request: FakeGenerationRequest) -> object:
+        self.requests.append(request)
+        with open(request.output_wav, "wb") as fh:
+            fh.write(make_wav([len(request.text)] * 20 + [0] * 10))
+        return SimpleNamespace(output_wav=request.output_wav)
+
+
 class ValueErrorMLXRuntime:
     def __init__(self, *, config: FakeRuntimeConfig) -> None:
         self.config = config
@@ -87,6 +105,25 @@ def fake_module_loader():
         load_model_config_json=lambda path: {"model_config_path": path},
     )
     return runtime_module, lambda **_kwargs: None
+
+
+def make_wav(samples: list[int], *, framerate: int = 1000) -> bytes:
+    output = BytesIO()
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(framerate)
+        wav_file.writeframes(b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples))
+    return output.getvalue()
+
+
+def read_wav_samples(audio: bytes) -> list[int]:
+    with wave.open(BytesIO(audio), "rb") as wav_file:
+        frames = wav_file.readframes(wav_file.getnframes())
+    return [
+        int.from_bytes(frames[index : index + 2], "little", signed=True)
+        for index in range(0, len(frames), 2)
+    ]
 
 
 def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
@@ -210,6 +247,136 @@ def test_mlx_runtime_manager_lets_explicit_num_steps_override_preset() -> None:
     )
 
     assert FakeMLXRuntime.instances[0].requests[0].num_steps == 32
+
+
+def test_split_text_for_generation_prefers_punctuation_boundaries() -> None:
+    assert split_text_for_generation("短い文です。次の文です。最後です。", max_chars=8) == [
+        "短い文です。",
+        "次の文です。",
+        "最後です。",
+    ]
+
+
+def test_split_text_for_generation_falls_back_to_hard_slices() -> None:
+    assert split_text_for_generation("abcdefghijklmnopqrstuvwxyz", max_chars=10) == [
+        "abcdefghij",
+        "klmnopqrst",
+        "uvwxyz",
+    ]
+
+
+def test_mlx_runtime_manager_chunks_long_text_and_concatenates_wav_output() -> None:
+    WaveMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(
+            weights_path="/weights/model.npz",
+            model_config_json="/weights/model_config.json",
+            text_max_length=8,
+        ),
+        runtime_factory=WaveMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+
+    result = manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello. goodbye.",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={"no_reference": True},
+        )
+    )
+
+    requests = WaveMLXRuntime.instances[0].requests
+    assert [request.text for request in requests] == ["hello.", "goodbye."]
+    assert [request.seconds for request in requests] == [None, None]
+    assert read_wav_samples(result.audio) == [6] * 20 + [0] * 10 + [8] * 20 + [0] * 10
+
+
+def test_mlx_runtime_manager_distributes_explicit_seconds_across_chunks() -> None:
+    WaveMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(
+            weights_path="/weights/model.npz",
+            model_config_json="/weights/model_config.json",
+            text_max_length=5,
+        ),
+        runtime_factory=WaveMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="abcde fghij",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={"no_reference": True, "seconds": 4.0},
+        )
+    )
+
+    assert [request.text for request in WaveMLXRuntime.instances[0].requests] == ["abcde", "fghij"]
+    assert [request.seconds for request in WaveMLXRuntime.instances[0].requests] == [2.0, 2.0]
+
+
+def test_mlx_runtime_manager_can_disable_chunking() -> None:
+    WaveMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(
+            weights_path="/weights/model.npz",
+            model_config_json="/weights/model_config.json",
+            text_max_length=5,
+        ),
+        runtime_factory=WaveMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="abcde fghij",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={"no_reference": True, "chunking": False},
+        )
+    )
+
+    assert [request.text for request in WaveMLXRuntime.instances[0].requests] == ["abcde fghij"]
+
+
+def test_mlx_runtime_manager_applies_tail_artifact_controls_per_chunk() -> None:
+    WaveMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(
+            weights_path="/weights/model.npz",
+            model_config_json="/weights/model_config.json",
+            text_max_length=5,
+        ),
+        runtime_factory=WaveMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+
+    result = manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="abcde fghij",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={
+                "no_reference": True,
+                "tail_trim_ms": 5,
+                "tail_silence_trim_ms": 5,
+                "tail_silence_keep_ms": 2,
+                "tail_silence_threshold": 0,
+            },
+        )
+    )
+
+    assert read_wav_samples(result.audio) == [5] * 20 + [0] * 2 + [5] * 20 + [0] * 2
 
 
 def test_mlx_runtime_manager_synchronizes_lazy_runtime_initialization() -> None:

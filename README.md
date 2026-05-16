@@ -98,9 +98,26 @@ Streaming responses are not supported and return an OpenAI-style error object.
 Supported `irodori` runtime options include `reference_wav`, `no_reference`,
 `caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,
 `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`,
-`cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, and `no_context_kv_cache`.
+`cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, `no_context_kv_cache`,
+`chunking`, `chunk_max_chars`, `tail_trim_ms`, `tail_silence_trim_ms`,
+`tail_silence_keep_ms`, and `tail_silence_threshold`.
 When `duration_scale` is omitted, OpenAI `speed` maps to
 `duration_scale=1/speed`.
+
+Long text chunking is enabled by default. The server splits text on Japanese and
+English punctuation before falling back to hard character slices, using
+`IRODORI_MLX_TEXT_MAX_LENGTH` as the default `chunk_max_chars`. Set
+`irodori.chunking=false` to send the full text to the runtime unchanged, or set
+`irodori.chunk_max_chars` to tune the split point. When `irodori.seconds` is
+omitted, each chunk also omits `seconds` so Irodori-TTS-MLX can use its duration
+fallback or predicted-duration behavior. When `irodori.seconds` is explicit, the
+server distributes that total duration across chunks by character count.
+
+Tail artifact controls are optional and run before chunk concatenation.
+`tail_trim_ms` removes a fixed amount from the end of each generated chunk.
+`tail_silence_trim_ms` removes trailing 16-bit PCM silence only when at least
+that much silence is present, preserving `tail_silence_keep_ms`; the silence
+threshold defaults to `256` and can be tuned with `tail_silence_threshold`.
 
 For VoiceDesign v2 caption-conditioned hosted weights, set
 `irodori.no_reference=true` and provide a concise style caption such as
