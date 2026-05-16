@@ -10,6 +10,10 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from irodori_tts_mlx_server.audio import (
+    AudioConversionError,
+    convert_audio_response,
+)
 from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     RuntimeUnavailableError,
@@ -46,7 +50,7 @@ class AudioSpeechRequest(BaseModel):
     model: str = Field(min_length=1)
     input: str = Field(min_length=1)
     voice: str = Field(min_length=1)
-    response_format: Literal["mp3", "wav"] = "mp3"
+    response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = "mp3"
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
     irodori: dict[str, Any] = Field(default_factory=dict)
     stream: bool = False
@@ -127,19 +131,11 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
                 param="model",
                 code="model_not_found",
             )
-        if request.response_format != "wav":
-            raise openai_error(
-                "Only response_format='wav' is supported by the current MVP runtime.",
-                status_code=400,
-                param="response_format",
-                code="unsupported_response_format",
-            )
-
         generation_request = SpeechGenerationRequest(
             model=request.model,
             input=request.input,
             voice=request.voice,
-            response_format=request.response_format,
+            response_format="wav",
             speed=request.speed,
             irodori=request.irodori,
         )
@@ -159,7 +155,18 @@ def create_app(runtime: SpeechRuntime | None = None) -> FastAPI:
                 error_type="server_error",
                 code="runtime_unavailable",
             ) from exc
+        try:
+            converted_result = convert_audio_response(result, request.response_format)
+        except AudioConversionError as exc:
+            status_code = 400 if exc.code == "unsupported_response_format" else 503
+            raise openai_error(
+                str(exc),
+                status_code=status_code,
+                error_type="server_error" if status_code >= 500 else "invalid_request_error",
+                param="response_format",
+                code=exc.code,
+            ) from exc
 
-        return Response(content=result.audio, media_type=result.media_type)
+        return Response(content=converted_result.audio, media_type=converted_result.media_type)
 
     return app

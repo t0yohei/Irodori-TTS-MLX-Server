@@ -1,4 +1,6 @@
 import importlib
+import io
+import wave
 
 from fastapi.testclient import TestClient
 
@@ -8,6 +10,16 @@ from irodori_tts_mlx_server.runtime import (
     SpeechGenerationRequest,
     SpeechGenerationResult,
 )
+
+
+def wav_bytes(pcm: bytes = bytes([1, 2, 3, 4])) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(24000)
+        wav_file.writeframes(pcm)
+    return buffer.getvalue()
 
 
 class MockSpeechRuntime:
@@ -22,7 +34,7 @@ class MockSpeechRuntime:
 
     def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
         self.requests.append(request)
-        return SpeechGenerationResult(audio=b"RIFF....WAVEfmt ", media_type="audio/wav")
+        return SpeechGenerationResult(audio=wav_bytes(), media_type="audio/wav")
 
 
 class FalseyMockSpeechRuntime(MockSpeechRuntime):
@@ -70,7 +82,7 @@ def test_audio_speech_returns_complete_wav_bytes_from_runtime() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/wav"
-    assert response.content == b"RIFF....WAVEfmt "
+    assert response.content == wav_bytes()
     assert runtime.requests == [
         SpeechGenerationRequest(
             model="irodori-tts-mlx",
@@ -197,17 +209,68 @@ def test_audio_speech_rejects_unsupported_response_format() -> None:
             "model": "irodori-tts-mlx",
             "input": "hello",
             "voice": "alloy",
-            "response_format": "mp3",
+            "response_format": "ogg",
         },
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 422
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert response.json()["error"]["param"] == "response_format"
+    assert response.json()["error"]["code"] == "validation_error"
+
+
+def test_audio_speech_returns_pcm_extracted_from_generated_wav() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "pcm",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/pcm"
+    assert response.content == bytes([1, 2, 3, 4])
+    assert runtime.requests == [
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="alloy",
+            response_format="wav",
+            speed=1.0,
+            irodori={},
+        )
+    ]
+
+
+def test_audio_speech_reports_missing_ffmpeg_for_compressed_default_format(monkeypatch) -> None:
+    app_module = importlib.import_module("irodori_tts_mlx_server.audio")
+    monkeypatch.setattr(app_module.shutil, "which", lambda _name: None)
+
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+        },
+    )
+
+    assert response.status_code == 503
     assert response.json()["error"] == {
-        "message": "Only response_format='wav' is supported by the current MVP runtime.",
-        "type": "invalid_request_error",
+        "message": (
+            "response_format='mp3' requires FFmpeg. Install FFmpeg or request "
+            "response_format='wav' or 'pcm'."
+        ),
+        "type": "server_error",
         "param": "response_format",
-        "code": "unsupported_response_format",
+        "code": "response_format_unavailable",
     }
+    assert runtime.requests[0].response_format == "wav"
 
 
 def test_audio_speech_rejects_invalid_irodori_runtime_options() -> None:
@@ -231,7 +294,27 @@ def test_audio_speech_rejects_invalid_irodori_runtime_options() -> None:
     }
 
 
-def test_audio_speech_preserves_openai_default_format_and_rejects_until_supported() -> None:
+def test_audio_speech_preserves_openai_default_format_and_encodes_when_ffmpeg_available(
+    monkeypatch,
+) -> None:
+    app_module = importlib.import_module("irodori_tts_mlx_server.audio")
+
+    def fake_run(command, *, capture_output, text, check):
+        assert command[0] == "/usr/bin/ffmpeg"
+        assert "-f" in command
+        assert command[command.index("-f") + 1] == "mp3"
+        output_path = command[-1]
+        with open(output_path, "wb") as output_file:
+            output_file.write(b"encoded-mp3")
+
+        class Completed:
+            returncode = 0
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(app_module.shutil, "which", lambda _name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech",
@@ -242,9 +325,10 @@ def test_audio_speech_preserves_openai_default_format_and_rejects_until_supporte
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "unsupported_response_format"
-    assert runtime.requests == []
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/mpeg"
+    assert response.content == b"encoded-mp3"
+    assert runtime.requests[0].response_format == "wav"
 
 
 def test_default_app_imports_without_model_weights_and_reports_runtime_unavailable() -> None:
