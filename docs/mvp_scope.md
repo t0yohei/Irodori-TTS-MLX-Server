@@ -44,7 +44,8 @@ The MVP should not include:
 - Streaming synthesis responses.
 - Voice upload or voice library management.
 - Dynamic LoRA loading or training controls.
-- Multi-worker scheduling, queue management, or horizontal scaling.
+- Multi-worker scheduling or horizontal scaling beyond the local synthesis
+  semaphore.
 - Full parity with every upstream Irodori-TTS-Server route.
 - Reference-audio generation paths unless they are clearly easier than the
   VoiceDesign v2 no-reference/caption path.
@@ -60,4 +61,5 @@ The first implementation issues can proceed with these assumptions:
 4. Runtime integration should stay behind a narrow adapter so request validation
    and response formatting can be tested without loading model weights.
 5. Advanced production controls belong in follow-up issues after the first local
-   text-to-audio smoke path works.
+   text-to-audio smoke path works; the MVP only includes optional bearer auth
+   and local synthesis concurrency limits.

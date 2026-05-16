@@ -82,7 +82,7 @@ curl http://127.0.0.1:8000/health
 Expected response:
 
 ```json
-{"status":"ok","speech_runtime":{"runtime":"unconfigured","configured":false,"loaded":false,"model_id":"irodori-tts-mlx"}}
+{"status":"ok","speech_runtime":{"runtime":"unconfigured","configured":false,"loaded":false,"model_id":"irodori-tts-mlx"},"server":{"auth_enabled":false,"max_concurrent_synthesis":1,"queue_timeout_seconds":30.0}}
 ```
 
 Configure the real MLX runtime with either a hosted converted-weights layout:
@@ -108,6 +108,18 @@ The same settings can be supplied through environment variables:
 `IRODORI_MLX_PRELOAD=1` loads the model during startup; otherwise loading is
 lazy on the first speech request.
 
+Local development does not require authentication by default. Set
+`IRODORI_SERVER_BEARER_TOKEN` to require `Authorization: Bearer <token>` on the
+OpenAI-compatible `/v1/*` routes while leaving `/health` unauthenticated for
+local probes. `IRODORI_API_KEY` is accepted as a compatibility alias when
+`IRODORI_SERVER_BEARER_TOKEN` is unset.
+
+Speech generation is bounded by a synthesis semaphore so expensive MLX work does
+not run concurrently unless configured. Defaults are conservative:
+`IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS=1` and
+`IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS=30`. Requests that cannot acquire a slot
+before the timeout return a 503 OpenAI-style `synthesis_queue_timeout` error.
+
 List OpenAI-compatible models:
 
 ```bash
@@ -119,6 +131,7 @@ Generate WAV speech once a runtime adapter is configured:
 ```bash
 curl http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <token>' \
   -d '{"model":"irodori-tts-mlx","input":"hello","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"calm narration, clear diction","preset":"balanced"}}' \
   --output speech.wav
 ```

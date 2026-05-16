@@ -1,10 +1,13 @@
 import importlib
 import io
+import threading
+import time
 import wave
 
 from fastapi.testclient import TestClient
 
 from irodori_tts_mlx_server import create_app
+from irodori_tts_mlx_server.config import ServerConfig
 from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     SpeechGenerationRequest,
@@ -47,6 +50,20 @@ class InvalidOptionsRuntime(MockSpeechRuntime):
         raise RuntimeRequestError("irodori.num_steps must be > 0.")
 
 
+class BlockingSpeechRuntime(MockSpeechRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
+        self.requests.append(request)
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise AssertionError("test did not release blocked synthesis")
+        return SpeechGenerationResult(audio=wav_bytes(), media_type="audio/wav")
+
+
 def test_v1_models_returns_openai_compatible_model_list() -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).get("/v1/models")
 
@@ -62,6 +79,121 @@ def test_v1_models_returns_openai_compatible_model_list() -> None:
             }
         ],
     }
+
+
+def test_openai_routes_require_bearer_token_when_configured() -> None:
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(bearer_token="secret"))
+    )
+
+    missing_response = client.get("/v1/models")
+    invalid_response = client.post(
+        "/v1/audio/speech",
+        headers={"Authorization": "Bearer wrong"},
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+        },
+    )
+    valid_response = client.get("/v1/models", headers={"Authorization": "Bearer secret"})
+    health_response = client.get("/health")
+
+    assert missing_response.status_code == 401
+    assert missing_response.json()["error"] == {
+        "message": "Missing or invalid bearer token.",
+        "type": "authentication_error",
+        "param": None,
+        "code": "invalid_api_key",
+    }
+    assert invalid_response.status_code == 401
+    assert valid_response.status_code == 200
+    assert health_response.status_code == 200
+    assert health_response.json()["server"]["auth_enabled"] is True
+
+
+def test_openai_routes_allow_local_development_without_auth() -> None:
+    response = TestClient(create_app(runtime=MockSpeechRuntime())).get("/v1/models")
+
+    assert response.status_code == 200
+
+
+def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
+    runtime = BlockingSpeechRuntime()
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            config=ServerConfig(max_concurrent_synthesis=1, queue_timeout_seconds=0.01),
+        )
+    )
+    payload = {
+        "model": "irodori-tts-mlx",
+        "input": "hello",
+        "voice": "alloy",
+        "response_format": "wav",
+    }
+    first_status: dict[str, int] = {}
+
+    def first_request() -> None:
+        first_status["status_code"] = client.post("/v1/audio/speech", json=payload).status_code
+
+    thread = threading.Thread(target=first_request)
+    thread.start()
+    assert runtime.started.wait(timeout=2)
+    try:
+        response = client.post("/v1/audio/speech", json=payload)
+    finally:
+        runtime.release.set()
+        thread.join(timeout=2)
+
+    assert response.status_code == 503
+    assert response.json()["error"] == {
+        "message": "Synthesis queue is full or the model is still loading; retry later.",
+        "type": "server_error",
+        "param": None,
+        "code": "synthesis_queue_timeout",
+    }
+    assert first_status == {"status_code": 200}
+
+
+def test_audio_speech_allows_configured_concurrent_synthesis() -> None:
+    class SleepingRuntime(MockSpeechRuntime):
+        def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
+            self.requests.append(request)
+            time.sleep(0.05)
+            return SpeechGenerationResult(audio=wav_bytes(), media_type="audio/wav")
+
+    runtime = SleepingRuntime()
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            config=ServerConfig(max_concurrent_synthesis=2, queue_timeout_seconds=1.0),
+        )
+    )
+    payload = {
+        "model": "irodori-tts-mlx",
+        "input": "hello",
+        "voice": "alloy",
+        "response_format": "wav",
+    }
+    statuses: list[int] = []
+    threads = [
+        threading.Thread(
+            target=lambda: statuses.append(
+                client.post("/v1/audio/speech", json=payload).status_code
+            )
+        )
+        for _ in range(2)
+    ]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert sorted(statuses) == [200, 200]
+    assert len(runtime.requests) == 2
 
 
 def test_audio_speech_returns_complete_wav_bytes_from_runtime() -> None:
@@ -416,6 +548,7 @@ def test_default_app_reports_invalid_integer_env_as_runtime_unavailable(monkeypa
         "model_id": "irodori-tts-mlx",
         "last_load_error": "IRODORI_MLX_TEXT_MAX_LENGTH must be an integer.",
     }
+    assert health_response.json()["server"]["auth_enabled"] is False
     assert speech_response.status_code == 503
     assert speech_response.json()["error"]["code"] == "runtime_unavailable"
     assert "IRODORI_MLX_TEXT_MAX_LENGTH" in speech_response.json()["error"]["message"]
