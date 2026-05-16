@@ -27,12 +27,15 @@ Irodori-TTS-MLX:
 | `model` | Yes | Selects the configured Irodori-TTS-MLX model family or alias. |
 | `input` | Yes | Text to synthesize. |
 | `voice` | Yes | VoiceDesign voice or preset identifier. |
-| `response_format` | No | Defaults to `wav`; additional formats can be added after MVP synthesis works. |
+| `response_format` | No | Defaults to `mp3` for OpenAI API compatibility. `wav` is the required first local format; other formats can be added after MVP synthesis works. |
 | `speed` | No | May be accepted for compatibility, but can be ignored or rejected with a clear error until the backend supports it. |
 
 The MVP response should be an audio byte stream with an appropriate
-`Content-Type`, starting with `audio/wav`. Structured JSON error responses
-should be used for validation and runtime failures.
+`Content-Type`. OpenAI-compatible clients that omit `response_format` should
+see the OpenAI default behavior (`mp3`) once encoding support is available.
+Early local smoke tests may require `response_format=wav` until compressed
+output support lands. Structured JSON error responses should be used for
+validation and runtime failures.
 
 ## Non-Goals
 
