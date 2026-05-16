@@ -18,6 +18,38 @@ The default runtime is import-safe without model weights. It lists the MVP model
 id but returns a clear `runtime_unavailable` error for speech generation until a
 converted Irodori-TTS-MLX weights are configured.
 
+## Relationship to Aratako/Irodori-TTS-Server
+
+[Aratako/Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server) is
+the upstream OpenAI-compatible server for
+[Aratako/Irodori-TTS](https://github.com/Aratako/Irodori-TTS). It targets the
+PyTorch Irodori-TTS 500M v3 base model and includes a broader production server
+surface: reference voice management, long-text chunking, request queueing,
+bearer-token auth, dynamic LoRA options, and response formats such as `wav`,
+`mp3`, `flac`, `opus`, `aac`, and `pcm`.
+
+This repository is a separate MLX-focused server for
+[Irodori-TTS-MLX](https://github.com/t0yohei/Irodori-TTS-MLX). The compatibility
+goal is to preserve the OpenAI-style client shape where it maps cleanly to the
+MLX runtime, starting with `GET /v1/models` and `POST /v1/audio/speech`, while
+keeping the backend boundary narrow enough to run on Apple Silicon with
+converted MLX weights.
+
+Choose the upstream server when you want the PyTorch v3 base model, CUDA-oriented
+deployment, Docker Compose setup, built-in voice-file APIs, automatic long-text
+chunking, queue controls, optional auth, or multiple encoded response formats.
+Choose this server when you specifically want to exercise Irodori-TTS-MLX on
+Apple Silicon and can provide converted MLX weights plus the matching model
+configuration.
+
+The current MLX server MVP does not claim parity with the upstream server. The
+initial surface supports the OpenAI-compatible model list and speech endpoint,
+VoiceDesign v2 no-reference/caption options, `wav` output, and clear
+configuration errors before weights are available. Runtime smoke evidence,
+compressed audio formats, voice management endpoints, long-text chunking,
+queueing, bearer-token auth, and full upstream option coverage are tracked as
+follow-up work unless explicitly documented as implemented here.
+
 ## Local Development
 
 Create a virtual environment and install the package with development tools:
