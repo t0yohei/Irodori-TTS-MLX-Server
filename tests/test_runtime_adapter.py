@@ -265,6 +265,22 @@ def test_split_text_for_generation_preserves_spaces_between_punctuation_segments
     ]
 
 
+def test_split_text_for_generation_preserves_missing_spaces_between_punctuation_segments() -> None:
+    assert split_text_for_generation("文。次。終。", max_chars=4) == [
+        "文。次。",
+        "終。",
+    ]
+
+
+def test_split_text_for_generation_preserves_unsplit_input_spacing() -> None:
+    assert split_text_for_generation("  hello  ", max_chars=20) == ["  hello  "]
+    assert split_text_for_generation("   ", max_chars=5) == ["   "]
+
+
+def test_split_text_for_generation_keeps_whitespace_only_chunks_non_empty() -> None:
+    assert split_text_for_generation("      ", max_chars=2) == ["  ", "  ", "  "]
+
+
 def test_split_text_for_generation_falls_back_to_hard_slices() -> None:
     assert split_text_for_generation("abcdefghijklmnopqrstuvwxyz", max_chars=10) == [
         "abcdefghij",

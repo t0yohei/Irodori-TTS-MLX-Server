@@ -273,22 +273,20 @@ def split_text_for_generation(text: str, *, max_chars: int) -> list[str]:
 
     if max_chars < 1:
         raise RuntimeRequestError("irodori.chunk_max_chars must be >= 1.")
-    stripped = text.strip()
-    if len(stripped) <= max_chars:
-        return [stripped]
+    if len(text) <= max_chars:
+        return [text]
 
     chunks: list[str] = []
     current = ""
-    for segment in _iter_punctuation_segments(stripped):
+    for segment in _iter_punctuation_segments(text):
         if not current:
             current = segment
             continue
-        separator = "" if current.endswith((" ", "\n")) or segment.startswith((" ", "\n")) else " "
-        if len(current) + len(separator) + len(segment) <= max_chars:
-            current += separator + segment
+        if len(current) + len(segment) <= max_chars:
+            current += segment
             continue
         chunks.extend(_split_overlong_segment(current, max_chars=max_chars))
-        current = segment
+        current = segment.lstrip()
     if current:
         chunks.extend(_split_overlong_segment(current, max_chars=max_chars))
     return [chunk for chunk in chunks if chunk]
@@ -301,11 +299,11 @@ def _iter_punctuation_segments(text: str) -> list[str]:
     for index, char in enumerate(text):
         if char in break_chars:
             end = index + 1
-            segment = text[start:end].strip()
+            segment = text[start:end]
             if segment:
                 segments.append(segment)
             start = end
-    tail = text[start:].strip()
+    tail = text[start:]
     if tail:
         segments.append(tail)
     return segments
@@ -313,7 +311,9 @@ def _iter_punctuation_segments(text: str) -> list[str]:
 
 def _split_overlong_segment(text: str, *, max_chars: int) -> list[str]:
     if len(text) <= max_chars:
-        return [text.strip()]
+        return [text]
+    if text.strip() == "":
+        return [text[index : index + max_chars] for index in range(0, len(text), max_chars)]
     chunks: list[str] = []
     remaining = text.strip()
     while len(remaining) > max_chars:
