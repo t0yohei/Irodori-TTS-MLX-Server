@@ -37,10 +37,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.preload:
         os.environ["IRODORI_MLX_PRELOAD"] = "1"
     uvicorn.run(
-        "irodori_tts_mlx_server.app:app",
+        "irodori_tts_mlx_server.app:create_app",
         host=args.host,
         port=args.port,
         reload=args.reload,
+        factory=True,
     )
 
 
