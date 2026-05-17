@@ -24,14 +24,14 @@ Status values:
 | Model id default | Defaults to `irodori-tts`. | Defaults to `irodori-tts-mlx`. | Partial | Use this server model id in clients, or set `IRODORI_MLX_MODEL_ID` if a local compatibility alias is required. |
 | Response formats | Supports `wav`, `mp3`, `flac`, `opus`, `aac`, and `pcm`; FFmpeg is needed for encoded formats. | Supports `wav` and `pcm` without optional encoders, and `mp3`, `flac`, `opus`, and `aac` through FFmpeg. OpenAI default `mp3` is preserved. | Implemented | The runtime always produces WAV first, then this server converts the response when needed. |
 | Streaming response / SSE | Rejects `stream_format: "sse"` because generation is non-streaming. | Rejects `stream=true`, any `stream_format`, and SSE `Accept` requests with `unsupported_streaming`. | Implemented | Client SDK helpers named `with_streaming_response` can still download the complete response. |
-| Reference voice support | Resolves voices from files, `voices.json`, HTTP uploads, or a voice object. | Per-request `irodori.reference_wav` can be passed to the MLX runtime when `irodori.no_reference=false`. Managed `.wav` files uploaded under `/v1/audio/voices` can also be selected by `voice` id. | Partial | The MLX server intentionally keeps reference management narrow: no alias file, latent reference, remote URL, non-WAV upload, or voice object normalization yet. |
+| Reference voice support | Resolves voices from files, `voices.json`, HTTP uploads, or a voice object. | Managed audio files uploaded under `/v1/audio/voices` can be selected by `voice` id or `{"id":"voice_id"}`; explicit `irodori.reference_wav` must resolve to an existing managed file under `IRODORI_SERVER_VOICES_DIR`. | Partial | The MLX server accepts common managed audio extensions but intentionally rejects alias files, latent references, remote URLs, path traversal, and arbitrary local paths. |
 | VoiceDesign caption / no-reference support | Supports upstream no-reference behavior through the PyTorch runtime and voice registry conventions. | Supports VoiceDesign v2 no-reference caption generation with `irodori.no_reference=true` and `irodori.caption`. Hosted converted VoiceDesign weights are documented in `docs/real_model_setup.md`. | Partial | This is the primary MLX path, but real smoke validation remains opt-in and depends on converted weights plus the external Irodori-TTS-MLX runtime package. |
 | Irodori runtime options | Supports common v3 sampling controls such as `num_steps`, `cfg_scale_text`, `cfg_scale_speaker`, `seed`, schedule controls, and per-request `lora_adapter`. | Supports `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`, `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`, `cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, and context-cache control. Upstream aliases `no_ref`, `ref_wav`, `max_ref_seconds`, `context_kv_cache`, and `chunking_enabled` are normalized when unambiguous. `irodori.lora_adapter` is parsed but rejected. | Partial | Dynamic LoRA, latent references, `chunk_min_chars`, and PyTorch schedule-specific fields are explicitly rejected rather than silently ignored. |
 | Long-text chunking | Automatically chunks long text, with request/default controls such as `chunking_enabled` and `chunk_min_chars`; skips chunking when explicit seconds are set. | Chunks by punctuation and hard character slices by default using `irodori.chunking` and `irodori.chunk_max_chars`; accepts `chunking_enabled` as an alias for enable/disable; explicit `irodori.seconds` is distributed across chunks by character count. | Partial | `chunk_min_chars` is intentionally rejected because upstream minimum-split semantics do not match the MLX server's maximum-size splitter. |
 | Queue / concurrency controls | Serializes expensive synthesis work with queue timeout controls. | Uses a synthesis semaphore controlled by `IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS` and `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS`; queue exhaustion returns `synthesis_queue_timeout`. | Implemented | Defaults are local-machine oriented: one synthesis at a time and a 30-second queue timeout. |
 | Bearer-token auth | Optional bearer-token auth on OpenAI-compatible routes. | Optional bearer-token auth on `/v1/*` routes via `IRODORI_SERVER_BEARER_TOKEN`; `IRODORI_API_KEY` is accepted as an alias. `/health` stays unauthenticated. | Implemented | This matches the intended local/OpenAI-compatible auth shape. |
 | Docker / deployment support | Includes `Dockerfile`, Compose files, GPU-oriented NVIDIA/CUDA guidance, mounted voices, and Hugging Face cache volume reuse. | Local Python and Apple Silicon setup are documented, with checked-in launchd and environment templates for local packaged deployment. Docker and Compose are not provided. | Partial | The supported packaged target is macOS launchd for Apple Silicon MLX. Docker/Compose remains out of the default path because this repo should not imply CUDA or PyTorch container support. |
-| Voice management endpoints | Provides `GET`, `POST`, `GET by id`, `PUT`, and `DELETE` routes under `/v1/audio/voices`. | Provides the same route shape for managed `.wav` reference files under `IRODORI_SERVER_VOICES_DIR`. | Partial | This is a minimal useful subset for OpenAI-style clients. It omits upstream alias-file scanning, latent `.pt`/`.pth` references, non-WAV upload formats, and broad voice-object normalization because those would expand the MLX server's storage and runtime contract. |
+| Voice management endpoints | Provides `GET`, `POST`, `GET by id`, `PUT`, and `DELETE` routes under `/v1/audio/voices`. | Provides the same route shape for managed audio reference files under `IRODORI_SERVER_VOICES_DIR`, including `.wav`, `.flac`, `.mp3`, `.m4a`, `.ogg`, `.opus`, `.aac`, and `.webm`. | Partial | This is a safe subset for OpenAI-style clients. It omits upstream alias-file scanning, latent `.pt`/`.pth` references, and broad voice-object normalization because those would expand the MLX server's storage and runtime contract. |
 | Runtime / model backend | Uses the PyTorch Irodori-TTS 500M v3 base model from Hugging Face or a local safetensors checkpoint, with CUDA-oriented deployment. | Uses the external `irodori_mlx.runtime` adapter with hosted or local converted MLX weights: `IRODORI_MLX_WEIGHTS_REPO`, `IRODORI_MLX_WEIGHTS_DIR`, or `IRODORI_MLX_WEIGHTS_PATH` plus `IRODORI_MLX_MODEL_CONFIG_JSON`. | Partial | The backend is intentionally different. Fresh checkout setup and converted-weight layout are documented, but real-weight smoke testing is opt-in and may take several minutes. |
 | CUDA / PyTorch checkpoint serving | Provides the upstream CUDA/PyTorch server path for `Aratako/Irodori-TTS-500M-v3`. | Does not serve PyTorch safetensors checkpoints or CUDA runtimes. | Intentionally out of scope | This repository exists to expose Irodori-TTS-MLX on Apple Silicon. Use the upstream server for the PyTorch/CUDA stack. |
 | Dynamic LoRA adapters | Supports per-request `irodori.lora_adapter` with runtime caching, except when model compilation is enabled. | Not implemented. Requests with a non-empty `irodori.lora_adapter` return `invalid_irodori_options`; path-like values are rejected explicitly. | Unsupported | The current Irodori-TTS-MLX `GenerationRequest` and `MLXDACVAERuntime` boundary does not expose dynamic LoRA loading or adapter cache/reload semantics. This server therefore does not add PyTorch/CUDA assumptions or arbitrary local path loading. |
@@ -40,29 +40,43 @@ Status values:
 
 ## Managed reference voice scope
 
-Issue #24 evaluated the upstream voice/reference API and implemented the
-smallest scope that is useful for this MLX server: managed `.wav` reference file
-CRUD at `/v1/audio/voices` plus speech-time resolution from `voice="<id>"` to
-`irodori.reference_wav`. The implementation deliberately avoids upstream
-features that can read or normalize references outside the managed directory:
-`voices.json` aliases, absolute or relative path aliases, latent `.pt`/`.pth`
-files, remote URLs, and non-WAV uploads are deferred.
+Issue #38 re-audited the upstream voice/reference API after the initial #24
+managed-WAV subset. The safe MLX-compatible scope is managed audio file CRUD at
+`/v1/audio/voices`, speech-time resolution from `voice="<id>"` or
+`voice={"id":"<id>"}` to `irodori.reference_wav`, and explicit
+`irodori.reference_wav` only when the path resolves to an existing managed file.
+The implementation deliberately avoids upstream features that can read or
+normalize references outside the managed directory: `voices.json` aliases,
+absolute or relative path aliases that escape the managed root, latent
+`.pt`/`.pth` files, remote URLs, and symbolic links are rejected or ignored.
 
 Storage and security assumptions:
 
 - `IRODORI_SERVER_VOICES_DIR` chooses the managed storage root and defaults to
   `voices` relative to the server process.
 - `voice_id` accepts only ASCII letters, numbers, underscores, and hyphens.
-- Uploaded files are written as `<voice_id>.wav` inside the managed directory.
+- Uploaded files are written as `<voice_id><extension>` inside the managed
+  directory. Supported extensions are `.wav`, `.flac`, `.mp3`, `.m4a`,
+  `.ogg`, `.opus`, `.aac`, and `.webm`.
 - New uploads and replacements are committed atomically so interrupted writes do
   not expose partial managed voice files.
-- A speech request using a managed `voice` id injects the managed file path
+- A speech request using a managed `voice` id only injects the managed file path
   when the request did not already provide explicit `irodori.reference_wav` or
-  `irodori.no_reference=true` options. Upstream-style `no_ref=false` keeps
+  a no-reference option other than false. Upstream-style `no_ref=false` keeps
   managed voice resolution enabled.
-- Direct `irodori.reference_wav` remains an explicit local-server option for
-  trusted deployments; the management API itself does not resolve arbitrary
-  client-supplied paths.
+- Direct `irodori.reference_wav` is no longer an arbitrary local-server path:
+  it must be a managed, non-symlink file under `IRODORI_SERVER_VOICES_DIR`.
+
+Audit classification:
+
+- Implemented: managed common audio upload extensions, `voice={"id":"..."}`
+  normalization, and managed-root validation for explicit `irodori.reference_wav`.
+- Deferred: conversion of uploaded non-WAV files to WAV. The MLX runtime adapter
+  receives the managed audio path and remains the decode boundary; adding a
+  server-side transcoder would introduce new optional audio tooling.
+- Out of scope for this Apple Silicon MLX server: arbitrary local path aliases,
+  remote URL references, symlinked managed files, and upstream latent
+  `.pt`/`.pth` references.
 
 ## Dynamic LoRA adapter status
 

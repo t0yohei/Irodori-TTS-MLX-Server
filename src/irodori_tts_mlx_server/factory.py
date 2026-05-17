@@ -12,7 +12,7 @@ from typing import Any, AsyncIterator, Literal
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from irodori_tts_mlx_server.config import ServerConfig, server_config_from_env
@@ -65,7 +65,7 @@ class AudioSpeechRequest(BaseModel):
 
     model: str = Field(min_length=1)
     input: str = Field(min_length=1)
-    voice: str = Field(min_length=1)
+    voice: str | dict[str, Any]
     response_format: Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] = "mp3"
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
     irodori: dict[str, Any] = Field(default_factory=dict)
@@ -106,6 +106,20 @@ class AudioSpeechRequest(BaseModel):
         _normalize_irodori_aliases(irodori_options)
         normalized["irodori"] = irodori_options
         return normalized
+
+    @field_validator("voice", mode="before")
+    @classmethod
+    def validate_voice(cls, value: Any) -> str | dict[str, Any]:
+        if isinstance(value, str):
+            if not value:
+                raise ValueError("String should have at least 1 character")
+            return value
+        if not isinstance(value, dict):
+            raise ValueError("voice must be a non-empty string or object with a string id")
+        raw = value.get("id")
+        if not isinstance(raw, str) or not raw:
+            raise ValueError("voice object must include a non-empty string id")
+        return value
 
 
 TOP_LEVEL_IRODORI_ALIASES = {
@@ -415,17 +429,39 @@ def _apply_managed_voice_reference(
 ) -> dict[str, Any]:
     irodori_options = dict(request.irodori)
     if "reference_wav" in irodori_options:
+        reference_wav = irodori_options["reference_wav"]
+        if not isinstance(reference_wav, str) or not reference_wav.strip():
+            raise openai_error(
+                "irodori.reference_wav must be a non-empty string.",
+                status_code=400,
+                param="irodori.reference_wav",
+                code="invalid_irodori_options",
+            )
+        try:
+            irodori_options["reference_wav"] = str(
+                voice_registry.validate_reference_path(reference_wav)
+            )
+        except ValueError as exc:
+            raise openai_error(
+                str(exc),
+                status_code=400,
+                param="irodori.reference_wav",
+                code="invalid_irodori_options",
+            ) from exc
+        except OSError as exc:
+            raise _voice_storage_error(exc)
         return irodori_options
     if "no_reference" in irodori_options:
         no_reference = _bool_like_option(irodori_options["no_reference"])
         if no_reference is not False:
             return irodori_options
 
-    if not voice_registry.is_managed_voice_id(request.voice):
+    voice_id = _voice_id_from_request(request.voice)
+    if voice_id is None or not voice_registry.is_managed_voice_id(voice_id):
         return irodori_options
 
     try:
-        voice_file = voice_registry.get_file(request.voice)
+        voice_file = voice_registry.get_file(voice_id)
     except ValueError:
         return irodori_options
     except OSError:
@@ -436,6 +472,19 @@ def _apply_managed_voice_reference(
     irodori_options["reference_wav"] = str(voice_file.path)
     irodori_options["no_reference"] = False
     return irodori_options
+
+
+def _voice_id_from_request(voice: str | dict[str, Any]) -> str | None:
+    if isinstance(voice, str):
+        return voice
+    raw = voice.get("id")
+    if not isinstance(raw, str) or not raw:
+        return None
+    return raw
+
+
+def _runtime_voice_from_request(voice: str | dict[str, Any]) -> str:
+    return _voice_id_from_request(voice) or ""
 
 
 def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None = None) -> FastAPI:
@@ -701,7 +750,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
         generation_request = SpeechGenerationRequest(
             model=request.model,
             input=request.input,
-            voice=request.voice,
+            voice=_runtime_voice_from_request(request.voice),
             response_format="wav",
             speed=request.speed,
             irodori=irodori_options,

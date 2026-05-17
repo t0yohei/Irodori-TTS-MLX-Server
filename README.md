@@ -141,14 +141,19 @@ before the timeout return a 503 OpenAI-style `synthesis_queue_timeout` error.
 Reference voice files can be managed through a small upstream-style subset under
 `/v1/audio/voices`. Set `IRODORI_SERVER_VOICES_DIR` to choose the storage
 directory; it defaults to `voices` relative to the server process. Managed
-reference voices are WAV-only. Voice IDs may contain ASCII letters, numbers,
-underscores, or hyphens. Uploaded files are always stored as
-`<voice_id>.wav` inside that directory, and speech requests that set
-`voice` to a managed ID automatically receive `irodori.reference_wav` and
-`irodori.no_reference=false` unless the request already supplies explicit
-reference options or `irodori.no_reference=true`. Upstream-style `no_ref=false`
-still allows managed voice resolution. This route does not resolve arbitrary
-client-supplied file paths, alias files, latent references, or remote URLs.
+reference voices may use `.wav`, `.flac`, `.mp3`, `.m4a`, `.ogg`,
+`.opus`, `.aac`, or `.webm`. Voice IDs may contain ASCII letters,
+numbers, underscores, or hyphens. Uploaded files are stored as
+`<voice_id><extension>` inside that directory, and speech requests that set
+`voice` to a managed ID or `{"id":"<voice_id>"}` automatically receive
+`irodori.reference_wav` and `irodori.no_reference=false` unless the request
+already supplies explicit reference options or a no-reference option other than
+false. Upstream-style `no_ref=false` still allows managed voice resolution.
+Explicit
+`irodori.reference_wav` values are accepted only when they resolve to an
+existing, non-symlink managed file inside `IRODORI_SERVER_VOICES_DIR`; remote
+URLs, path traversal, and arbitrary local paths are rejected. This route does
+not resolve alias files or latent references.
 Uploads are capped by `IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES`, which defaults
 to 50 MiB. New managed voice files are committed atomically so interrupted
 uploads do not leave partial `<voice_id>.wav` files behind.
@@ -170,8 +175,7 @@ curl http://127.0.0.1:8000/v1/audio/voices \
 Additional managed voice routes are `GET /v1/audio/voices/{voice_id}`,
 `PUT /v1/audio/voices/{voice_id}`, and
 `DELETE /v1/audio/voices/{voice_id}`. Use the upstream PyTorch server when you
-need alias-file resolution, latent reference files, or non-WAV voice upload
-formats.
+need alias-file resolution or latent reference files.
 
 Managed voice endpoint summary:
 

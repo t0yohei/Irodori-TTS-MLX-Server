@@ -21,4 +21,13 @@ def test_health_returns_ok() -> None:
     assert server["queue_timeout_seconds"] == 30.0
     assert server["voices"]["dir"] == "voices"
     assert server["voices"]["files"] == 0
-    assert server["voices"]["formats"] == [".wav"]
+    assert server["voices"]["formats"] == [
+        ".wav",
+        ".flac",
+        ".mp3",
+        ".m4a",
+        ".ogg",
+        ".opus",
+        ".aac",
+        ".webm",
+    ]
