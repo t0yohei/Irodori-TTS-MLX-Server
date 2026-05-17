@@ -85,6 +85,10 @@ Expected response:
 {"status":"ok","speech_runtime":{"runtime":"unconfigured","configured":false,"loaded":false,"model_id":"irodori-tts-mlx"},"server":{"auth_enabled":false,"max_concurrent_synthesis":1,"queue_timeout_seconds":30.0}}
 ```
 
+See [docs/real_model_setup.md](docs/real_model_setup.md) for the full fresh
+checkout setup walkthrough, converted-weights layout contract, local run
+commands, speech `curl` example, and common error codes.
+
 Configure the real MLX runtime with either a hosted converted-weights layout:
 
 ```bash
