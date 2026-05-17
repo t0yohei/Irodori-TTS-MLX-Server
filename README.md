@@ -50,6 +50,9 @@ compressed audio formats, voice management endpoints, long-text chunking,
 queueing, bearer-token auth, and full upstream option coverage are tracked as
 follow-up work unless explicitly documented as implemented here.
 
+See [docs/upstream_compatibility.md](docs/upstream_compatibility.md) for the
+concrete upstream compatibility gap matrix.
+
 ## Local Development
 
 Create a virtual environment and install the package with development tools:
