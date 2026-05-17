@@ -57,6 +57,13 @@ class InvalidOptionsRuntime(MockSpeechRuntime):
         raise RuntimeRequestError("irodori.num_steps must be > 0.")
 
 
+class UnsupportedLoraRuntime(MockSpeechRuntime):
+    def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
+        raise RuntimeRequestError(
+            "irodori.lora_adapter is not supported by the current Irodori-TTS-MLX runtime boundary."
+        )
+
+
 class BlockingSpeechRuntime(MockSpeechRuntime):
     def __init__(self) -> None:
         super().__init__()
@@ -349,9 +356,7 @@ def test_voice_read_routes_report_file_storage_root_as_storage_error_without_bre
     voices_root = tmp_path / "voices"
     voices_root.write_text("not a directory")
     runtime = MockSpeechRuntime()
-    client = TestClient(
-        create_app(runtime=runtime, config=ServerConfig(voices_dir=voices_root))
-    )
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=voices_root)))
 
     listed = client.get("/v1/audio/voices")
     fetched = client.get("/v1/audio/voices/sample")
@@ -557,9 +562,7 @@ def test_managed_voice_does_not_override_explicit_irodori_reference_options(tmp_
 
 
 @pytest.mark.parametrize("voice", ["../sample", "my.voice", "voice:v1"])
-def test_audio_speech_treats_unmanaged_punctuated_voice_as_reference_miss(
-    tmp_path, voice
-) -> None:
+def test_audio_speech_treats_unmanaged_punctuated_voice_as_reference_miss(tmp_path, voice) -> None:
     runtime = MockSpeechRuntime()
     client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
 
@@ -1059,6 +1062,27 @@ def test_audio_speech_rejects_invalid_irodori_runtime_options() -> None:
     assert response.status_code == 400
     assert response.json()["error"] == {
         "message": "irodori.num_steps must be > 0.",
+        "type": "invalid_request_error",
+        "param": "irodori",
+        "code": "invalid_irodori_options",
+    }
+
+
+def test_audio_speech_rejects_unsupported_lora_adapter_with_openai_error_shape() -> None:
+    response = TestClient(create_app(runtime=UnsupportedLoraRuntime())).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+            "irodori": {"lora_adapter": "warm-narration"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "message": "irodori.lora_adapter is not supported by the current Irodori-TTS-MLX runtime boundary.",
         "type": "invalid_request_error",
         "param": "irodori",
         "code": "invalid_irodori_options",

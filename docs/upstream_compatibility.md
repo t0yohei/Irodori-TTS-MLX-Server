@@ -26,7 +26,7 @@ Status values:
 | Streaming response / SSE | Rejects `stream_format: "sse"` because generation is non-streaming. | Rejects `stream=true` and SSE `Accept` requests with `unsupported_streaming`. | Implemented | Client SDK helpers named `with_streaming_response` can still download the complete response. |
 | Reference voice support | Resolves voices from files, `voices.json`, HTTP uploads, or a voice object. | Per-request `irodori.reference_wav` can be passed to the MLX runtime when `irodori.no_reference=false`. Managed `.wav` files uploaded under `/v1/audio/voices` can also be selected by `voice` id. | Partial | The MLX server intentionally keeps reference management narrow: no alias file, latent reference, remote URL, non-WAV upload, or voice object normalization yet. |
 | VoiceDesign caption / no-reference support | Supports upstream no-reference behavior through the PyTorch runtime and voice registry conventions. | Supports VoiceDesign v2 no-reference caption generation with `irodori.no_reference=true` and `irodori.caption`. Hosted converted VoiceDesign weights are documented in `docs/real_model_setup.md`. | Partial | This is the primary MLX path, but real smoke validation remains opt-in and depends on converted weights plus the external Irodori-TTS-MLX runtime package. |
-| Irodori runtime options | Supports common v3 sampling controls such as `num_steps`, `cfg_scale_text`, `cfg_scale_speaker`, `seed`, schedule controls, and per-request `lora_adapter`. | Supports `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`, `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`, `cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, and context-cache control. | Partial | Option names follow the MLX runtime adapter. Dynamic LoRA and upstream schedule-specific fields are not implemented. |
+| Irodori runtime options | Supports common v3 sampling controls such as `num_steps`, `cfg_scale_text`, `cfg_scale_speaker`, `seed`, schedule controls, and per-request `lora_adapter`. | Supports `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`, `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`, `cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, and context-cache control. `irodori.lora_adapter` is parsed but rejected. | Partial | Option names follow the MLX runtime adapter. Dynamic LoRA and upstream schedule-specific fields are not implemented. |
 | Long-text chunking | Automatically chunks long text, with request/default controls such as `chunking_enabled` and `chunk_min_chars`; skips chunking when explicit seconds are set. | Chunks by punctuation and hard character slices by default using `irodori.chunking` and `irodori.chunk_max_chars`; explicit `irodori.seconds` is distributed across chunks by character count. | Partial | The behavior is implemented but not identical. The MLX server favors max-size splitting and duration distribution. |
 | Queue / concurrency controls | Serializes expensive synthesis work with queue timeout controls. | Uses a synthesis semaphore controlled by `IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS` and `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS`; queue exhaustion returns `synthesis_queue_timeout`. | Implemented | Defaults are local-machine oriented: one synthesis at a time and a 30-second queue timeout. |
 | Bearer-token auth | Optional bearer-token auth on OpenAI-compatible routes. | Optional bearer-token auth on `/v1/*` routes via `IRODORI_SERVER_BEARER_TOKEN`; `IRODORI_API_KEY` is accepted as an alias. `/health` stays unauthenticated. | Implemented | This matches the intended local/OpenAI-compatible auth shape. |
@@ -34,7 +34,7 @@ Status values:
 | Voice management endpoints | Provides `GET`, `POST`, `GET by id`, `PUT`, and `DELETE` routes under `/v1/audio/voices`. | Provides the same route shape for managed `.wav` reference files under `IRODORI_SERVER_VOICES_DIR`. | Partial | This is a minimal useful subset for OpenAI-style clients. It omits upstream alias-file scanning, latent `.pt`/`.pth` references, non-WAV upload formats, and broad voice-object normalization because those would expand the MLX server's storage and runtime contract. |
 | Runtime / model backend | Uses the PyTorch Irodori-TTS 500M v3 base model from Hugging Face or a local safetensors checkpoint, with CUDA-oriented deployment. | Uses the external `irodori_mlx.runtime` adapter with hosted or local converted MLX weights: `IRODORI_MLX_WEIGHTS_REPO`, `IRODORI_MLX_WEIGHTS_DIR`, or `IRODORI_MLX_WEIGHTS_PATH` plus `IRODORI_MLX_MODEL_CONFIG_JSON`. | Partial | The backend is intentionally different. Fresh checkout setup and converted-weight layout are documented, but real-weight smoke testing is opt-in and may take several minutes. |
 | CUDA / PyTorch checkpoint serving | Provides the upstream CUDA/PyTorch server path for `Aratako/Irodori-TTS-500M-v3`. | Does not serve PyTorch safetensors checkpoints or CUDA runtimes. | Intentionally out of scope | This repository exists to expose Irodori-TTS-MLX on Apple Silicon. Use the upstream server for the PyTorch/CUDA stack. |
-| Dynamic LoRA adapters | Supports per-request `irodori.lora_adapter` with runtime caching, except when model compilation is enabled. | Not implemented. | Unsupported | The current MLX adapter boundary does not expose dynamic LoRA loading. |
+| Dynamic LoRA adapters | Supports per-request `irodori.lora_adapter` with runtime caching, except when model compilation is enabled. | Not implemented. Requests with a non-empty `irodori.lora_adapter` return `invalid_irodori_options`; path-like values are rejected explicitly. | Unsupported | The current Irodori-TTS-MLX `GenerationRequest` and `MLXDACVAERuntime` boundary does not expose dynamic LoRA loading or adapter cache/reload semantics. This server therefore does not add PyTorch/CUDA assumptions or arbitrary local path loading. |
 | Health endpoint | Reports model, runtime, voices, defaults, and queue configuration without loading the model. | Reports runtime configuration/load state and server auth/concurrency settings without forcing model load. | Partial | Voice-registry and PyTorch-specific fields do not exist in this server. |
 | Error shape | Uses OpenAI-style JSON errors for validation, auth, runtime, and queue failures. | Uses OpenAI-style JSON errors for validation, auth, runtime, encoder, and queue failures. | Implemented | Error codes differ where backend-specific failures differ. |
 
@@ -60,6 +60,28 @@ Storage and security assumptions:
 - Direct `irodori.reference_wav` remains an explicit local-server option for
   trusted deployments; the management API itself does not resolve arbitrary
   client-supplied paths.
+
+## Dynamic LoRA adapter status
+
+Issue #37 evaluated the current Irodori-TTS-MLX runtime API. The MLX runtime
+request contract exposes sampling, speaker/reference, caption, duration, and
+context-cache controls, but it does not expose a clean LoRA adapter field,
+adapter allowlist, cache key, reload hook, or unload behavior. This server keeps
+LoRA unsupported until that contract exists in the MLX runtime.
+
+Runtime behavior:
+
+- Omitted or empty `irodori.lora_adapter` values are ignored for compatibility
+  with clients that send blank optional fields.
+- Non-string `irodori.lora_adapter` values return `invalid_irodori_options`.
+- Path-like values such as `../adapter.safetensors`, `/models/a.safetensors`,
+  `~/adapter`, or drive-style strings are rejected before runtime generation.
+- Safe-looking aliases such as `warm-narration` also return
+  `invalid_irodori_options` with an unsupported-runtime message.
+
+Future MLX support should require an explicit configured alias or allowlist
+root, should not load arbitrary request paths, and should document cache/reload
+semantics before enabling per-request adapter selection.
 
 ## Current Priorities
 
