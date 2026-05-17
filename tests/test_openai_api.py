@@ -304,6 +304,27 @@ def test_voice_delete_reports_storage_errors(monkeypatch, tmp_path) -> None:
     assert response.json()["error"]["code"] == "voice_storage_unavailable"
 
 
+def test_voice_replace_reports_storage_race_as_storage_error(monkeypatch, tmp_path) -> None:
+    (tmp_path / "sample.wav").write_bytes(b"old wav")
+
+    def fail_write_file(*args, **kwargs):
+        raise FileNotFoundError("voices directory disappeared")
+
+    monkeypatch.setattr(VoiceRegistry, "write_file", fail_write_file)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.put(
+        "/v1/audio/voices/sample",
+        files={"file": ("sample.wav", b"new wav", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "server_error"
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
 def test_voice_upload_reports_file_storage_root_as_storage_error(tmp_path) -> None:
     voices_root = tmp_path / "voices"
     voices_root.write_text("not a directory")
@@ -321,7 +342,9 @@ def test_voice_upload_reports_file_storage_root_as_storage_error(tmp_path) -> No
     assert response.json()["error"]["code"] == "voice_storage_unavailable"
 
 
-def test_voice_read_routes_report_file_storage_root_as_storage_error(tmp_path) -> None:
+def test_voice_read_routes_report_file_storage_root_as_storage_error_without_breaking_speech(
+    tmp_path,
+) -> None:
     voices_root = tmp_path / "voices"
     voices_root.write_text("not a directory")
     runtime = MockSpeechRuntime()
@@ -346,8 +369,8 @@ def test_voice_read_routes_report_file_storage_root_as_storage_error(tmp_path) -
     assert listed.json()["error"]["code"] == "voice_storage_unavailable"
     assert fetched.status_code == 503
     assert fetched.json()["error"]["code"] == "voice_storage_unavailable"
-    assert speech.status_code == 503
-    assert speech.json()["error"]["code"] == "voice_storage_unavailable"
+    assert speech.status_code == 200
+    assert runtime.requests[-1].irodori == {}
     assert health.status_code == 200
     assert "not a directory" in health.json()["server"]["voices"]["files_error"]
 
