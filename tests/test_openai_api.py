@@ -5,10 +5,13 @@ import time
 import wave
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from irodori_tts_mlx_server import create_app
 from irodori_tts_mlx_server.config import ServerConfig, server_config_from_env
+from irodori_tts_mlx_server.factory import _reject_oversized_voice_upload_request
 from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     SpeechGenerationRequest,
@@ -237,6 +240,26 @@ def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(
     assert not (tmp_path.parent / "sample.wav").exists()
 
 
+def test_voice_upload_reports_storage_errors(monkeypatch, tmp_path) -> None:
+    def fail_write_file(*args, **kwargs):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(VoiceRegistry, "write_file", fail_write_file)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "server_error"
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
 def test_voice_upload_and_replace_reject_files_above_configured_limit(tmp_path) -> None:
     client = TestClient(
         create_app(
@@ -288,6 +311,27 @@ def test_voice_upload_rejects_large_content_length_before_multipart_spooling(tmp
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "voice_file_too_large"
     assert not (tmp_path / "large.wav").exists()
+
+
+def test_voice_upload_requires_content_length_before_multipart_spooling() -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/audio/voices",
+            "headers": [],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "client": ("testclient", 50000),
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _reject_oversized_voice_upload_request(ServerConfig(), request)
+
+    assert exc_info.value.status_code == 411
+    assert exc_info.value.detail["error"]["code"] == "content_length_required"
 
 
 def test_voice_list_ignores_wav_files_with_unmanaged_ids(tmp_path) -> None:

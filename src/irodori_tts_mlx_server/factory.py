@@ -124,12 +124,27 @@ def _voice_file_too_large_error(max_bytes: int) -> HTTPException:
     )
 
 
+def _voice_storage_error(exc: OSError) -> HTTPException:
+    return openai_error(
+        f"Managed reference voice storage is unavailable: {exc}",
+        status_code=503,
+        error_type="server_error",
+        param="voice_id",
+        code="voice_storage_unavailable",
+    )
+
+
 def _reject_oversized_voice_upload_request(config: ServerConfig, request: Request) -> None:
     if not _is_voice_upload_route(request):
         return
     content_length = request.headers.get("content-length")
     if content_length is None:
-        return
+        raise openai_error(
+            "Voice uploads require a Content-Length header.",
+            status_code=411,
+            param="content-length",
+            code="content_length_required",
+        )
     try:
         request_bytes = int(content_length)
     except ValueError as exc:
@@ -366,6 +381,8 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             raise openai_error(str(exc), status_code=409, param="voice_id", code="voice_exists")
         except ValueError as exc:
             raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
+        except OSError as exc:
+            raise _voice_storage_error(exc)
         return VoiceUploadResponse(**voice_file.metadata())
 
     @app.get("/v1/audio/voices/{voice_id}", tags=["openai"])
@@ -413,6 +430,8 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             )
         except ValueError as exc:
             raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
+        except OSError as exc:
+            raise _voice_storage_error(exc)
         return VoiceUploadResponse(**voice_file.metadata())
 
     @app.delete("/v1/audio/voices/{voice_id}", tags=["openai"])
