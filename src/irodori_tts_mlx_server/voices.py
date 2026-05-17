@@ -39,12 +39,21 @@ class VoiceRegistry:
 
     def status_metadata(self) -> dict[str, Any]:
         root = self.root
-        return {
+        files_error: str | None = None
+        try:
+            files = len(self.list_files()) if root.is_dir() else 0
+        except OSError as exc:
+            files = 0
+            files_error = str(exc)
+        metadata = {
             "dir": str(root),
             "dir_exists": root.is_dir(),
-            "files": len(self.list_files()) if root.is_dir() else 0,
+            "files": files,
             "formats": [VOICE_FILE_SUFFIX],
         }
+        if files_error is not None:
+            metadata["files_error"] = files_error
+        return metadata
 
     def list_files(self) -> list[VoiceFile]:
         root = self.root
@@ -89,7 +98,12 @@ class VoiceRegistry:
 
     def ensure_dir(self) -> Path:
         root = self.root
-        root.mkdir(parents=True, exist_ok=True)
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as exc:
+            raise NotADirectoryError(
+                f"Configured voices directory is not a directory: {root}"
+            ) from exc
         return root
 
     def _create_file(self, path: Path, data: bytes, *, voice_id: str) -> None:

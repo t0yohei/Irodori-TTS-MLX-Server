@@ -344,6 +344,10 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
         if server_configuration_error is not None:
             raise _server_configuration_error(server_configuration_error.message)
         _require_bearer_auth(server_config, api_request)
+        try:
+            voice_files = voice_registry.list_files()
+        except OSError as exc:
+            raise _voice_storage_error(exc)
         return {
             "object": "list",
             "data": [
@@ -354,7 +358,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                     "ref_latent": None,
                     "no_ref": False,
                 }
-                for voice_file in voice_registry.list_files()
+                for voice_file in voice_files
             ],
         }
 
@@ -443,6 +447,8 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             deleted = voice_registry.delete_file(voice_id)
         except ValueError as exc:
             raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
+        except OSError as exc:
+            raise _voice_storage_error(exc)
         if not deleted:
             raise openai_error(
                 f"Voice {voice_id!r} was not found.",

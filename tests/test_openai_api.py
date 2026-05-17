@@ -260,6 +260,58 @@ def test_voice_upload_reports_storage_errors(monkeypatch, tmp_path) -> None:
     assert response.json()["error"]["code"] == "voice_storage_unavailable"
 
 
+def test_voice_delete_reports_storage_errors(monkeypatch, tmp_path) -> None:
+    def fail_delete_file(*args, **kwargs):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(VoiceRegistry, "delete_file", fail_delete_file)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.delete("/v1/audio/voices/sample")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "server_error"
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
+def test_voice_upload_reports_file_storage_root_as_storage_error(tmp_path) -> None:
+    voices_root = tmp_path / "voices"
+    voices_root.write_text("not a directory")
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=voices_root))
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
+def test_voice_list_reports_storage_errors_without_breaking_health(monkeypatch, tmp_path) -> None:
+    def fail_list_files(*args, **kwargs):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(VoiceRegistry, "list_files", fail_list_files)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    health = client.get("/health")
+    response = client.get("/v1/audio/voices")
+
+    assert health.status_code == 200
+    assert health.json()["server"]["voices"]["files"] == 0
+    assert "permission denied" in health.json()["server"]["voices"]["files_error"]
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
 def test_voice_upload_and_replace_reject_files_above_configured_limit(tmp_path) -> None:
     client = TestClient(
         create_app(
