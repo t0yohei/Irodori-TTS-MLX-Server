@@ -82,3 +82,18 @@ That setup is compatibility context, not a parity claim: until the opt-in smoke
 test records a completed WAV/non-empty PCM run on a machine with the external
 Irodori-TTS-MLX runtime and converted weights installed, this matrix should keep
 runtime parity marked as partial.
+
+## Compatibility Regression Tests
+
+Run the deterministic OpenAI/upstream compatibility regression suite locally
+with:
+
+```bash
+python -m pytest tests/test_compatibility.py
+```
+
+These tests use a fake runtime rather than real MLX weights. They cover
+representative OpenAI Python client calls for model listing, bearer auth,
+non-streaming speech download, unsupported streaming, and response format
+conversion, plus upstream-style request fixtures for supported options and
+stable OpenAI-style error codes for unsupported behavior.
