@@ -129,7 +129,12 @@ def _reject_oversized_voice_upload_request(config: ServerConfig, request: Reques
         return
     content_length = request.headers.get("content-length")
     if content_length is None:
-        return
+        raise openai_error(
+            "Voice uploads require a Content-Length header.",
+            status_code=411,
+            param="content-length",
+            code="content_length_required",
+        )
     try:
         request_bytes = int(content_length)
     except ValueError as exc:
