@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import io
 import threading
@@ -12,7 +13,7 @@ from starlette.requests import Request
 import irodori_tts_mlx_server.voices as voice_module
 from irodori_tts_mlx_server import create_app
 from irodori_tts_mlx_server.config import ServerConfig, server_config_from_env
-from irodori_tts_mlx_server.factory import _reject_oversized_voice_upload_request
+from irodori_tts_mlx_server.factory import _install_voice_upload_size_guard
 from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     SpeechGenerationRequest,
@@ -447,7 +448,14 @@ def test_voice_upload_rejects_large_content_length_before_multipart_spooling(tmp
     assert not (tmp_path / "large.wav").exists()
 
 
-def test_voice_upload_requires_content_length_before_multipart_spooling() -> None:
+def test_voice_upload_without_content_length_installs_streamed_request_limit() -> None:
+    messages = [
+        {"type": "http.request", "body": b"1" * 70000, "more_body": False},
+    ]
+
+    async def receive():
+        return messages.pop(0)
+
     request = Request(
         {
             "type": "http",
@@ -458,14 +466,24 @@ def test_voice_upload_requires_content_length_before_multipart_spooling() -> Non
             "server": ("testserver", 80),
             "scheme": "http",
             "client": ("testclient", 50000),
-        }
+        },
+        receive,
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        _reject_oversized_voice_upload_request(ServerConfig(), request)
+    _install_voice_upload_size_guard(
+        ServerConfig(max_voice_upload_bytes=1),
+        request,
+    )
 
-    assert exc_info.value.status_code == 411
-    assert exc_info.value.detail["error"]["code"] == "content_length_required"
+    async def read_stream() -> None:
+        async for _chunk in request.stream():
+            pass
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(read_stream())
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.detail["error"]["code"] == "voice_file_too_large"
 
 
 def test_voice_list_ignores_wav_files_with_unmanaged_ids(tmp_path) -> None:

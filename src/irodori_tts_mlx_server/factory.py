@@ -134,29 +134,39 @@ def _voice_storage_error(exc: OSError) -> HTTPException:
     )
 
 
-def _reject_oversized_voice_upload_request(config: ServerConfig, request: Request) -> None:
+def _install_voice_upload_size_guard(config: ServerConfig, request: Request) -> None:
     if not _is_voice_upload_route(request):
         return
-    content_length = request.headers.get("content-length")
-    if content_length is None:
-        raise openai_error(
-            "Voice uploads require a Content-Length header.",
-            status_code=411,
-            param="content-length",
-            code="content_length_required",
-        )
-    try:
-        request_bytes = int(content_length)
-    except ValueError as exc:
-        raise openai_error(
-            "Invalid Content-Length header.",
-            status_code=400,
-            param="content-length",
-            code="invalid_content_length",
-        ) from exc
     max_request_bytes = config.max_voice_upload_bytes + VOICE_UPLOAD_MULTIPART_OVERHEAD_BYTES
-    if request_bytes > max_request_bytes:
-        raise _voice_file_too_large_error(config.max_voice_upload_bytes)
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            request_bytes = int(content_length)
+        except ValueError as exc:
+            raise openai_error(
+                "Invalid Content-Length header.",
+                status_code=400,
+                param="content-length",
+                code="invalid_content_length",
+            ) from exc
+        if request_bytes > max_request_bytes:
+            raise _voice_file_too_large_error(config.max_voice_upload_bytes)
+
+    receive = request._receive
+    received_bytes = 0
+
+    async def limited_receive() -> Any:
+        nonlocal received_bytes
+        message = await receive()
+        if message.get("type") == "http.request":
+            body = message.get("body", b"")
+            if isinstance(body, bytes):
+                received_bytes += len(body)
+                if received_bytes > max_request_bytes:
+                    raise _voice_file_too_large_error(config.max_voice_upload_bytes)
+        return message
+
+    request._receive = limited_receive
 
 
 async def _read_voice_upload(file: UploadFile, *, max_bytes: int) -> bytes:
@@ -269,13 +279,13 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
 
     @app.middleware("http")
     async def authenticate_openai_routes(api_request: Request, call_next: Any) -> Response:
-        if api_request.url.path.startswith("/v1/"):
-            try:
+        try:
+            if api_request.url.path.startswith("/v1/"):
                 _require_bearer_auth(server_config, api_request)
-                _reject_oversized_voice_upload_request(server_config, api_request)
-            except HTTPException as exc:
-                return _authentication_error_response(exc)
-        return await call_next(api_request)
+                _install_voice_upload_size_guard(server_config, api_request)
+            return await call_next(api_request)
+        except HTTPException as exc:
+            return _authentication_error_response(exc)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
