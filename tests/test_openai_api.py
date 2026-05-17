@@ -22,6 +22,9 @@ from irodori_tts_mlx_server.runtime import (
 from irodori_tts_mlx_server.voices import VoiceRegistry
 
 
+VOICE_FORMATS = [".wav", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".aac", ".webm"]
+
+
 def wav_bytes(pcm: bytes = bytes([1, 2, 3, 4])) -> bytes:
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav_file:
@@ -194,6 +197,40 @@ def test_voice_upload_list_get_replace_delete_and_speech_resolution(tmp_path) ->
     assert missing.status_code == 404
 
 
+def test_voice_upload_accepts_managed_non_wav_and_voice_object_resolution(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(
+        create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path / "voices"))
+    )
+
+    created = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.flac", b"flac", "audio/flac")},
+        data={"voice_id": "sample"},
+    )
+    listed = client.get("/v1/audio/voices")
+    speech = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": {"id": "sample"},
+            "response_format": "wav",
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["filename"] == "sample.flac"
+    assert listed.status_code == 200
+    assert listed.json()["data"][0]["ref_wav"] == str(tmp_path / "voices" / "sample.flac")
+    assert speech.status_code == 200
+    assert runtime.requests[-1].voice == "sample"
+    assert runtime.requests[-1].irodori == {
+        "reference_wav": str(tmp_path / "voices" / "sample.flac"),
+        "no_reference": False,
+    }
+
+
 def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(tmp_path) -> None:
     client = TestClient(
         create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
@@ -220,8 +257,8 @@ def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(
     )
     bad_extension = client.post(
         "/v1/audio/voices",
-        files={"file": ("sample.mp3", b"mp3", "audio/mpeg")},
-        data={"voice_id": "mp3"},
+        files={"file": ("sample.txt", b"text", "text/plain")},
+        data={"voice_id": "text"},
     )
     empty = client.post(
         "/v1/audio/voices",
@@ -234,9 +271,7 @@ def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(
     assert bad_id.status_code == 400
     assert bad_id.json()["error"]["code"] == "invalid_voice"
     assert bad_extension.status_code == 400
-    assert bad_extension.json()["error"]["message"] == (
-        "Managed reference voices must be uploaded as .wav files."
-    )
+    assert "Managed reference voices must use one of:" in bad_extension.json()["error"]["message"]
     assert empty.status_code == 400
     assert empty.json()["error"]["message"] == "Voice file must not be empty."
     assert not (tmp_path.parent / "sample.wav").exists()
@@ -427,6 +462,63 @@ def test_voice_upload_and_replace_reject_files_above_configured_limit(tmp_path) 
     assert replace_too_large.json()["error"]["code"] == "voice_file_too_large"
     assert (tmp_path / "sample.wav").read_bytes() == b"wav"
     assert not (tmp_path / "large.wav").exists()
+
+
+@pytest.mark.parametrize(
+    "reference_wav",
+    [
+        "https://example.com/ref.wav",
+        "../outside.wav",
+        "/tmp/ref.wav",
+        "imports/private.wav",
+        "bad.id.wav",
+    ],
+)
+def test_audio_speech_rejects_remote_or_arbitrary_reference_wav(tmp_path, reference_wav) -> None:
+    runtime = MockSpeechRuntime()
+    (tmp_path / "imports").mkdir()
+    (tmp_path / "imports" / "private.wav").write_bytes(b"wav")
+    (tmp_path / "bad.id.wav").write_bytes(b"wav")
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+            "irodori": {"reference_wav": reference_wav, "no_reference": False},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["param"] == "irodori.reference_wav"
+    assert response.json()["error"]["code"] == "invalid_irodori_options"
+    assert runtime.requests == []
+
+
+def test_audio_speech_accepts_explicit_managed_reference_wav(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    (tmp_path / "sample.wav").write_bytes(b"wav")
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+            "irodori": {"reference_wav": "sample.wav", "no_reference": False},
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].irodori == {
+        "reference_wav": str(tmp_path / "sample.wav"),
+        "no_reference": False,
+    }
 
 
 def test_voice_upload_rejects_large_content_length_before_multipart_spooling(tmp_path) -> None:
@@ -1183,7 +1275,7 @@ def test_invalid_server_env_keeps_health_available_and_blocks_openai_routes(monk
             "dir": "voices",
             "dir_exists": health_response.json()["server"]["voices"]["dir_exists"],
             "files": 0,
-            "formats": [".wav"],
+            "formats": VOICE_FORMATS,
         },
         "status": "configuration_error",
         "error": {
