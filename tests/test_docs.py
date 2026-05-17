@@ -111,6 +111,7 @@ def test_upstream_compatibility_matrix_covers_required_gap_areas() -> None:
         "Bearer-token auth",
         "Docker / deployment support",
         "Voice management endpoints",
+        "Managed reference voice scope",
         "Runtime / model backend",
         "Implemented",
         "Partial",
@@ -119,3 +120,18 @@ def test_upstream_compatibility_matrix_covers_required_gap_areas() -> None:
         "t0yohei/Irodori-TTS-MLX-500M-v2-VoiceDesign",
     ):
         assert required in doc
+
+
+def test_readme_covers_managed_reference_voice_scope() -> None:
+    readme = (ROOT / "README.md").read_text()
+
+    for required in (
+        "IRODORI_SERVER_VOICES_DIR",
+        "GET /v1/audio/voices",
+        "POST /v1/audio/voices",
+        "PUT /v1/audio/voices/{voice_id}",
+        "DELETE /v1/audio/voices/{voice_id}",
+        "reference voices are WAV-only",
+        "does not resolve arbitrary client-supplied file paths",
+    ):
+        assert required in readme

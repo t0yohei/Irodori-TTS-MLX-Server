@@ -98,6 +98,7 @@ def test_openai_routes_require_bearer_token_when_configured() -> None:
             "response_format": "wav",
         },
     )
+    voices_response = client.get("/v1/audio/voices")
     valid_response = client.get("/v1/models", headers={"Authorization": "Bearer secret"})
     health_response = client.get("/health")
 
@@ -109,6 +110,7 @@ def test_openai_routes_require_bearer_token_when_configured() -> None:
         "code": "invalid_api_key",
     }
     assert invalid_response.status_code == 401
+    assert voices_response.status_code == 401
     assert valid_response.status_code == 200
     assert health_response.status_code == 200
     assert health_response.json()["server"]["auth_enabled"] is True
@@ -118,6 +120,135 @@ def test_openai_routes_allow_local_development_without_auth() -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).get("/v1/models")
 
     assert response.status_code == 200
+
+
+def test_voice_upload_list_get_replace_delete_and_speech_resolution(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(
+        create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path / "voices"))
+    )
+
+    created = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"old wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+    listed = client.get("/v1/audio/voices")
+    fetched = client.get("/v1/audio/voices/sample")
+    speech = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+        },
+    )
+    replaced = client.put(
+        "/v1/audio/voices/sample",
+        files={"file": ("renamed.wav", b"new wav", "audio/wav")},
+    )
+    deleted = client.delete("/v1/audio/voices/sample")
+    missing = client.get("/v1/audio/voices/sample")
+
+    assert created.status_code == 201
+    assert created.json()["filename"] == "sample.wav"
+    assert listed.status_code == 200
+    assert listed.json()["data"] == [
+        {
+            "id": "sample",
+            "object": "voice",
+            "ref_wav": str(tmp_path / "voices" / "sample.wav"),
+            "ref_latent": None,
+            "no_ref": False,
+        }
+    ]
+    assert fetched.status_code == 200
+    assert speech.status_code == 200
+    assert runtime.requests[-1].irodori == {
+        "reference_wav": str(tmp_path / "voices" / "sample.wav"),
+        "no_reference": False,
+    }
+    assert replaced.status_code == 200
+    assert replaced.json()["bytes"] == len(b"new wav")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"id": "sample", "object": "voice_file", "deleted": True}
+    assert missing.status_code == 404
+
+
+def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(tmp_path) -> None:
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    duplicate = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+    bad_id = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "../sample"},
+    )
+    bad_extension = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.mp3", b"mp3", "audio/mpeg")},
+        data={"voice_id": "mp3"},
+    )
+    empty = client.post(
+        "/v1/audio/voices",
+        files={"file": ("empty.wav", b"", "audio/wav")},
+        data={"voice_id": "empty"},
+    )
+
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "voice_exists"
+    assert bad_id.status_code == 400
+    assert bad_id.json()["error"]["code"] == "invalid_voice"
+    assert bad_extension.status_code == 400
+    assert bad_extension.json()["error"]["message"] == (
+        "Managed reference voices must be uploaded as .wav files."
+    )
+    assert empty.status_code == 400
+    assert empty.json()["error"]["message"] == "Voice file must not be empty."
+    assert not (tmp_path.parent / "sample.wav").exists()
+
+
+def test_managed_voice_does_not_override_explicit_irodori_reference_options(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+            "irodori": {"no_reference": True, "caption": "calm"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].irodori == {"no_reference": True, "caption": "calm"}
 
 
 def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
@@ -665,6 +796,12 @@ def test_invalid_server_env_keeps_health_available_and_blocks_openai_routes(monk
         "auth_enabled": False,
         "max_concurrent_synthesis": 1,
         "queue_timeout_seconds": 30.0,
+        "voices": {
+            "dir": "voices",
+            "dir_exists": health_response.json()["server"]["voices"]["dir_exists"],
+            "files": 0,
+            "formats": [".wav"],
+        },
         "status": "configuration_error",
         "error": {
             "code": "server_configuration_error",

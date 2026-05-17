@@ -14,8 +14,10 @@ def test_health_returns_ok() -> None:
         "loaded": False,
         "model_id": "irodori-tts-mlx",
     }
-    assert response.json()["server"] == {
-        "auth_enabled": False,
-        "max_concurrent_synthesis": 1,
-        "queue_timeout_seconds": 30.0,
-    }
+    server = response.json()["server"]
+    assert server["auth_enabled"] is False
+    assert server["max_concurrent_synthesis"] == 1
+    assert server["queue_timeout_seconds"] == 30.0
+    assert server["voices"]["dir"] == "voices"
+    assert server["voices"]["files"] == 0
+    assert server["voices"]["formats"] == [".wav"]

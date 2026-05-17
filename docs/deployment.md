@@ -63,6 +63,7 @@ Optional runtime and server controls:
 | `IRODORI_API_KEY` | unset | Compatibility alias used only when `IRODORI_SERVER_BEARER_TOKEN` is unset. |
 | `IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS` | `1` | Number of synthesis requests allowed to run at once. Keep `1` for most Apple Silicon hosts. |
 | `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS` | `30` | Seconds a request waits for a synthesis slot before returning `synthesis_queue_timeout`; `0` disables waiting. |
+| `IRODORI_SERVER_VOICES_DIR` | `voices` | Directory used by `/v1/audio/voices` for managed WAV reference uploads. Keep this outside the repository for long-running deployments. |
 
 ## Auth and Network Binding
 

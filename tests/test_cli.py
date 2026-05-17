@@ -104,11 +104,11 @@ def test_server_control_env_configures_served_factory_app(monkeypatch) -> None:
 
     main_module.main([])
 
-    assert served_health == {
-        "auth_enabled": True,
-        "max_concurrent_synthesis": 2,
-        "queue_timeout_seconds": 0.5,
-    }
+    assert served_health["auth_enabled"] is True
+    assert served_health["max_concurrent_synthesis"] == 2
+    assert served_health["queue_timeout_seconds"] == 0.5
+    assert served_health["voices"]["dir"] == "voices"
+    assert served_health["voices"]["formats"] == [".wav"]
     assert unauthorized_status == 401
     assert authorized_status == 200
 
