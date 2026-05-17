@@ -98,7 +98,8 @@ OpenAI-compatible `curl` and Python client examples, including bearer auth,
 FFmpeg-backed response formats, and unsupported streaming behavior.
 See [docs/deployment.md](docs/deployment.md) for production-ish local deployment
 guidance covering Apple Silicon host assumptions, bearer auth, queue controls,
-health checks, logs, and a launchd example.
+health checks, logs, and the packaged launchd templates under
+[deployment/](deployment/).
 
 Configure the real MLX runtime with either a hosted converted-weights layout:
 
@@ -144,7 +145,9 @@ numbers, underscores, or hyphens. Uploaded files are stored as
 `<voice_id><extension>` inside that directory, and speech requests that set
 `voice` to a managed ID or `{"id":"<voice_id>"}` automatically receive
 `irodori.reference_wav` and `irodori.no_reference=false` unless the request
-already supplies explicit reference or no-reference options. Explicit
+already supplies explicit reference options or a no-reference option other than
+false. Upstream-style `no_ref=false` still allows managed voice resolution.
+Explicit
 `irodori.reference_wav` values are accepted only when they resolve to an
 existing, non-symlink managed file inside `IRODORI_SERVER_VOICES_DIR`; remote
 URLs, path traversal, and arbitrary local paths are rejected. This route does
@@ -196,7 +199,11 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 ```
 
 Requests accept `model`, `input`, `voice`, `response_format`, `speed`, and
-an `irodori` options object. `response_format=wav` and `response_format=pcm`
+an `irodori` options object. For upstream client compatibility, unambiguous
+top-level runtime option aliases such as `no_ref`, `seconds`, `duration_scale`,
+`num_steps`, `seed`, `cfg_scale_*`, `max_ref_seconds`, `context_kv_cache`, and
+`chunking_enabled` are normalized into `irodori`. `response_format=wav` and
+`response_format=pcm`
 work without optional encoders. `mp3`, `flac`, `opus`, and `aac` use FFmpeg
 when it is installed; otherwise the server returns an OpenAI-style error with
 setup guidance. Streaming responses are not supported and return an
@@ -208,6 +215,11 @@ Supported `irodori` runtime options include `reference_wav`, `no_reference`,
 `cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, `no_context_kv_cache`,
 `chunking`, `chunk_max_chars`, `tail_trim_ms`, `tail_silence_trim_ms`,
 `tail_silence_keep_ms`, and `tail_silence_threshold`.
+The upstream `irodori` aliases `ref_wav`, `no_ref`, `max_ref_seconds`,
+`context_kv_cache`, and `chunking_enabled` are also accepted when they map
+cleanly to the MLX runtime. Unsupported or ambiguous upstream options such as
+`lora_adapter`, `ref_latent`, `chunk_min_chars`, and PyTorch schedule-specific
+controls are rejected instead of being silently ignored.
 When `duration_scale` is omitted, OpenAI `speed` maps to
 `duration_scale=1/speed`.
 
