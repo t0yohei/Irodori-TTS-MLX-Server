@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import io
+import os
 import threading
 import time
 import wave
@@ -20,6 +21,9 @@ from irodori_tts_mlx_server.runtime import (
     SpeechGenerationResult,
 )
 from irodori_tts_mlx_server.voices import VoiceRegistry
+
+
+VOICE_FORMATS = [".wav", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".aac", ".webm"]
 
 
 def wav_bytes(pcm: bytes = bytes([1, 2, 3, 4])) -> bytes:
@@ -201,6 +205,59 @@ def test_voice_upload_list_get_replace_delete_and_speech_resolution(tmp_path) ->
     assert missing.status_code == 404
 
 
+def test_voice_upload_accepts_managed_non_wav_and_voice_object_resolution(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(
+        create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path / "voices"))
+    )
+
+    created = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.flac", b"flac", "audio/flac")},
+        data={"voice_id": "sample"},
+    )
+    listed = client.get("/v1/audio/voices")
+    speech = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": {"id": "sample"},
+            "response_format": "wav",
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["filename"] == "sample.flac"
+    assert listed.status_code == 200
+    assert listed.json()["data"][0]["ref_wav"] == str(tmp_path / "voices" / "sample.flac")
+    assert speech.status_code == 200
+    assert runtime.requests[-1].voice == "sample"
+    assert runtime.requests[-1].irodori == {
+        "reference_wav": str(tmp_path / "voices" / "sample.flac"),
+        "no_reference": False,
+    }
+
+
+@pytest.mark.parametrize("voice", [{"id": False}, {"id": {"nested": "sample"}}, {"id": ""}, False])
+def test_audio_speech_rejects_non_string_voice_object_ids(tmp_path, voice) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": voice,
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == 422
+    assert runtime.requests == []
+
+
 def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(tmp_path) -> None:
     client = TestClient(
         create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
@@ -227,8 +284,8 @@ def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(
     )
     bad_extension = client.post(
         "/v1/audio/voices",
-        files={"file": ("sample.mp3", b"mp3", "audio/mpeg")},
-        data={"voice_id": "mp3"},
+        files={"file": ("sample.txt", b"text", "text/plain")},
+        data={"voice_id": "text"},
     )
     empty = client.post(
         "/v1/audio/voices",
@@ -241,9 +298,7 @@ def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(
     assert bad_id.status_code == 400
     assert bad_id.json()["error"]["code"] == "invalid_voice"
     assert bad_extension.status_code == 400
-    assert bad_extension.json()["error"]["message"] == (
-        "Managed reference voices must be uploaded as .wav files."
-    )
+    assert "Managed reference voices must use one of:" in bad_extension.json()["error"]["message"]
     assert empty.status_code == 400
     assert empty.json()["error"]["message"] == "Voice file must not be empty."
     assert not (tmp_path.parent / "sample.wav").exists()
@@ -432,6 +487,63 @@ def test_voice_upload_and_replace_reject_files_above_configured_limit(tmp_path) 
     assert replace_too_large.json()["error"]["code"] == "voice_file_too_large"
     assert (tmp_path / "sample.wav").read_bytes() == b"wav"
     assert not (tmp_path / "large.wav").exists()
+
+
+@pytest.mark.parametrize(
+    "reference_wav",
+    [
+        "https://example.com/ref.wav",
+        "../outside.wav",
+        "/tmp/ref.wav",
+        "imports/private.wav",
+        "bad.id.wav",
+    ],
+)
+def test_audio_speech_rejects_remote_or_arbitrary_reference_wav(tmp_path, reference_wav) -> None:
+    runtime = MockSpeechRuntime()
+    (tmp_path / "imports").mkdir()
+    (tmp_path / "imports" / "private.wav").write_bytes(b"wav")
+    (tmp_path / "bad.id.wav").write_bytes(b"wav")
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+            "irodori": {"reference_wav": reference_wav, "no_reference": False},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["param"] == "irodori.reference_wav"
+    assert response.json()["error"]["code"] == "invalid_irodori_options"
+    assert runtime.requests == []
+
+
+def test_audio_speech_accepts_explicit_managed_reference_wav(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    (tmp_path / "sample.wav").write_bytes(b"wav")
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+            "irodori": {"reference_wav": "sample.wav", "no_reference": False},
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].irodori == {
+        "reference_wav": str(tmp_path / "sample.wav"),
+        "no_reference": False,
+    }
 
 
 def test_voice_upload_rejects_large_content_length_before_multipart_spooling(tmp_path) -> None:
@@ -664,6 +776,23 @@ def test_voice_replace_rejects_symlink_without_overwriting_target(tmp_path) -> N
     assert outside_target.read_bytes() == b"outside"
 
 
+def test_voice_replace_ignores_same_id_extension_directory(tmp_path) -> None:
+    (tmp_path / "sample.wav").write_bytes(b"old wav")
+    (tmp_path / "sample.mp3").mkdir()
+
+    voice_file = VoiceRegistry(tmp_path).write_file(
+        voice_id="sample",
+        filename="sample.flac",
+        data=b"new flac",
+        replace=True,
+    )
+
+    assert voice_file.path == tmp_path / "sample.flac"
+    assert (tmp_path / "sample.flac").read_bytes() == b"new flac"
+    assert not (tmp_path / "sample.wav").exists()
+    assert (tmp_path / "sample.mp3").is_dir()
+
+
 def test_voice_create_uses_atomic_exclusive_file_creation(tmp_path) -> None:
     registry = VoiceRegistry(tmp_path)
     barrier = threading.Barrier(2)
@@ -694,6 +823,75 @@ def test_voice_create_uses_atomic_exclusive_file_creation(tmp_path) -> None:
 
     assert sorted(outcomes) == ["created", "exists"]
     assert (tmp_path / "sample.wav").read_bytes() == b"wav"
+
+
+def test_voice_create_keeps_voice_id_unique_across_extensions(tmp_path) -> None:
+    registry = VoiceRegistry(tmp_path)
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def create_voice(filename: str, data: bytes) -> None:
+        barrier.wait(timeout=2)
+        try:
+            registry.write_file(
+                voice_id="sample",
+                filename=filename,
+                data=data,
+                replace=False,
+            )
+        except FileExistsError:
+            outcome = "exists"
+        else:
+            outcome = filename
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [
+        threading.Thread(target=create_voice, args=("sample.wav", b"wav")),
+        threading.Thread(target=create_voice, args=("sample.flac", b"flac")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert sorted(outcomes) in (["exists", "sample.flac"], ["exists", "sample.wav"])
+    assert len(list(tmp_path.glob("sample.*"))) == 1
+    assert not (tmp_path / ".sample.create.lock").exists()
+
+
+def test_voice_create_recovers_stale_lock_when_voice_file_is_absent(tmp_path) -> None:
+    lock_path = tmp_path / ".sample.create.lock"
+    lock_path.write_bytes(b"")
+    stale_time = time.time() - voice_module.STALE_CREATE_LOCK_SECONDS - 1
+    os.utime(lock_path, (stale_time, stale_time))
+
+    voice_file = VoiceRegistry(tmp_path).write_file(
+        voice_id="sample",
+        filename="sample.flac",
+        data=b"flac",
+        replace=False,
+    )
+
+    assert voice_file.path == tmp_path / "sample.flac"
+    assert voice_file.path.read_bytes() == b"flac"
+    assert not lock_path.exists()
+
+
+def test_voice_list_and_delete_handle_preexisting_duplicate_extensions(tmp_path) -> None:
+    (tmp_path / "sample.wav").write_bytes(b"wav")
+    (tmp_path / "sample.flac").write_bytes(b"flac")
+
+    registry = VoiceRegistry(tmp_path)
+    listed = registry.list_files()
+    deleted = registry.delete_file("sample")
+
+    assert [voice.voice_id for voice in listed] == ["sample"]
+    assert listed[0].path == tmp_path / "sample.wav"
+    assert deleted is True
+    assert not (tmp_path / "sample.wav").exists()
+    assert not (tmp_path / "sample.flac").exists()
 
 
 def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
@@ -946,9 +1144,12 @@ def test_audio_speech_accepts_upstream_style_top_level_option_aliases() -> None:
     }
 
 
-def test_audio_speech_accepts_upstream_style_irodori_option_aliases() -> None:
+def test_audio_speech_accepts_upstream_style_irodori_option_aliases(tmp_path) -> None:
     runtime = MockSpeechRuntime()
-    response = TestClient(create_app(runtime=runtime)).post(
+    (tmp_path / "reference.wav").write_bytes(b"wav")
+    response = TestClient(
+        create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path))
+    ).post(
         "/v1/audio/speech",
         json={
             "model": "irodori-tts-mlx",
@@ -956,7 +1157,7 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases() -> None:
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "ref_wav": "/tmp/reference.wav",
+                "ref_wav": "reference.wav",
                 "no_ref": False,
                 "max_ref_seconds": 10,
                 "context_kv_cache": True,
@@ -967,7 +1168,7 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases() -> None:
 
     assert response.status_code == 200
     assert runtime.requests[0].irodori == {
-        "reference_wav": "/tmp/reference.wav",
+        "reference_wav": str(tmp_path / "reference.wav"),
         "no_reference": False,
         "max_reference_seconds": 10,
         "no_context_kv_cache": False,
@@ -1454,7 +1655,7 @@ def test_invalid_server_env_keeps_health_available_and_blocks_openai_routes(monk
             "dir": "voices",
             "dir_exists": health_response.json()["server"]["voices"]["dir_exists"],
             "files": 0,
-            "formats": [".wav"],
+            "formats": VOICE_FORMATS,
         },
         "status": "configuration_error",
         "error": {

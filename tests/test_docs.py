@@ -193,7 +193,7 @@ def test_readme_covers_managed_reference_voice_scope() -> None:
         "POST /v1/audio/voices",
         "PUT /v1/audio/voices/{voice_id}",
         "DELETE /v1/audio/voices/{voice_id}",
-        "reference voices are WAV-only",
-        "does not resolve arbitrary client-supplied file paths",
+        "reference voices may use",
+        "arbitrary local paths are rejected",
     ):
         assert required in readme

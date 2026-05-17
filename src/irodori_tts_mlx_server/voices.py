@@ -5,14 +5,20 @@ from __future__ import annotations
 import errno
 import os
 import re
+import stat as stat_module
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 VOICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 VOICE_FILE_SUFFIX = ".wav"
+VOICE_FILE_SUFFIXES = (".wav", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".aac", ".webm")
+LATENT_FILE_SUFFIXES = (".pt", ".pth")
+STALE_CREATE_LOCK_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -32,7 +38,7 @@ class VoiceFile:
 
 
 class VoiceRegistry:
-    """A small WAV-only voice registry rooted inside one configured directory."""
+    """A small managed voice registry rooted inside one configured directory."""
 
     def __init__(self, root: Path) -> None:
         self.root = root.expanduser()
@@ -49,7 +55,7 @@ class VoiceRegistry:
             "dir": str(root),
             "dir_exists": root.is_dir(),
             "files": files,
-            "formats": [VOICE_FILE_SUFFIX],
+            "formats": list(VOICE_FILE_SUFFIXES),
         }
         if files_error is not None:
             metadata["files_error"] = files_error
@@ -59,41 +65,60 @@ class VoiceRegistry:
         root = self._existing_root()
         if root is None:
             return []
+        voice_ids: set[str] = set()
+        for path in sorted(root.iterdir(), key=lambda item: item.name):
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or path.suffix not in VOICE_FILE_SUFFIXES
+                or not self.is_managed_voice_id(path.stem)
+            ):
+                continue
+            voice_ids.add(path.stem)
         return [
-            VoiceFile(voice_id=path.stem, path=path)
-            for path in sorted(root.iterdir(), key=lambda item: item.name)
-            if not path.is_symlink()
-            and path.is_file()
-            and path.suffix == VOICE_FILE_SUFFIX
-            and self.is_managed_voice_id(path.stem)
+            voice_file
+            for voice_id in sorted(voice_ids)
+            if (voice_file := self.get_file(voice_id)) is not None
         ]
 
     def get_file(self, voice_id: str) -> VoiceFile | None:
         self.validate_voice_id(voice_id)
-        path = self._path_for_existing_root(voice_id)
-        if path.is_symlink() or not path.is_file():
+        root = self._existing_root()
+        if root is None:
             return None
-        return VoiceFile(voice_id=voice_id, path=path)
+        for path in self._candidate_paths(root, voice_id):
+            if path.is_symlink() or not path.is_file():
+                continue
+            return VoiceFile(voice_id=voice_id, path=path)
+        return None
 
     def write_file(self, *, voice_id: str, filename: str, data: bytes, replace: bool) -> VoiceFile:
         self.validate_voice_id(voice_id)
-        if Path(filename).suffix.lower() != VOICE_FILE_SUFFIX:
-            raise ValueError("Managed reference voices must be uploaded as .wav files.")
+        suffix = Path(filename).suffix.lower()
+        if suffix not in VOICE_FILE_SUFFIXES:
+            allowed = ", ".join(VOICE_FILE_SUFFIXES)
+            raise ValueError(f"Managed reference voices must use one of: {allowed}.")
         if not data:
             raise ValueError("Voice file must not be empty.")
+        if not replace and self.get_file(voice_id) is not None:
+            raise FileExistsError(
+                f"Voice {voice_id!r} already exists. Use PUT to replace it."
+            )
 
-        path = self._path_for(voice_id)
+        path = self._path_for(voice_id, suffix=suffix)
         if replace:
-            self._replace_file(path, data)
+            self._replace_file(path, data, voice_id=voice_id)
         else:
-            self._create_file(path, data, voice_id=voice_id)
+            self._create_unique_file(path, data, voice_id=voice_id)
         return VoiceFile(voice_id=voice_id, path=path)
 
     def delete_file(self, voice_id: str) -> bool:
         existing = self.get_file(voice_id)
         if existing is None:
             return False
-        existing.path.unlink()
+        for candidate in self._candidate_paths(existing.path.parent, voice_id):
+            if candidate.is_file():
+                candidate.unlink()
         return True
 
     def ensure_dir(self) -> Path:
@@ -127,9 +152,40 @@ class VoiceRegistry:
             path.unlink(missing_ok=True)
             raise
 
-    def _replace_file(self, path: Path, data: bytes) -> None:
-        if path.is_symlink():
-            raise ValueError("Managed reference voice files must not be symbolic links.")
+    def _create_unique_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
+        lock_path = path.parent / f".{voice_id}.create.lock"
+        self._create_create_lock(lock_path, voice_id=voice_id)
+        try:
+            if self.get_file(voice_id) is not None:
+                raise FileExistsError(
+                    f"Voice {voice_id!r} already exists. Use PUT to replace it."
+                )
+            self._create_file(path, data, voice_id=voice_id)
+        finally:
+            lock_path.unlink(missing_ok=True)
+
+    def _create_create_lock(self, lock_path: Path, *, voice_id: str) -> None:
+        try:
+            self._create_file(lock_path, b"", voice_id=voice_id)
+            return
+        except FileExistsError:
+            if self.get_file(voice_id) is not None:
+                raise
+            try:
+                stat = lock_path.lstat()
+            except FileNotFoundError:
+                self._create_file(lock_path, b"", voice_id=voice_id)
+                return
+            age_seconds = time.time() - stat.st_mtime
+            if not stat_module.S_ISREG(stat.st_mode) or age_seconds < STALE_CREATE_LOCK_SECONDS:
+                raise
+            lock_path.unlink(missing_ok=True)
+        self._create_file(lock_path, b"", voice_id=voice_id)
+
+    def _replace_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
+        for candidate in self._candidate_paths(path.parent, voice_id):
+            if candidate.is_symlink():
+                raise ValueError("Managed reference voice files must not be symbolic links.")
         temp_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -141,22 +197,45 @@ class VoiceRegistry:
                 temp_path = Path(temp_file.name)
                 temp_file.write(data)
             os.replace(temp_path, path)
+            for candidate in self._candidate_paths(path.parent, voice_id):
+                if candidate != path and candidate.is_file():
+                    candidate.unlink()
         finally:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
 
-    def _path_for(self, voice_id: str) -> Path:
-        root = self.ensure_dir().resolve(strict=False)
-        path = root / f"{voice_id}{VOICE_FILE_SUFFIX}"
-        if path.parent != root:
-            raise ValueError("voice_id must resolve inside the configured voices directory.")
-        return path
+    def validate_reference_path(self, value: str) -> Path:
+        parsed = urlparse(value)
+        if parsed.scheme or parsed.netloc:
+            raise ValueError("irodori.reference_wav must not be a remote URL.")
 
-    def _path_for_existing_root(self, voice_id: str) -> Path:
         root = self._existing_root()
         if root is None:
             root = self.root.resolve(strict=False)
-        path = root / f"{voice_id}{VOICE_FILE_SUFFIX}"
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        if path.is_symlink():
+            raise ValueError("irodori.reference_wav must not be a symbolic link.")
+        resolved = path.resolve(strict=False)
+        if not resolved.is_relative_to(root):
+            raise ValueError(
+                "irodori.reference_wav must resolve inside the configured voices directory."
+            )
+        if resolved.suffix.lower() not in VOICE_FILE_SUFFIXES:
+            allowed = ", ".join(VOICE_FILE_SUFFIXES)
+            raise ValueError(f"irodori.reference_wav must use one of: {allowed}.")
+        if resolved.parent != root or not self.is_managed_voice_id(resolved.stem):
+            raise ValueError("irodori.reference_wav must refer to a managed voice file.")
+        if resolved not in self._candidate_paths(root, resolved.stem):
+            raise ValueError("irodori.reference_wav must refer to a managed voice file.")
+        if not resolved.is_file():
+            raise ValueError("irodori.reference_wav must refer to a managed voice file.")
+        return resolved
+
+    def _path_for(self, voice_id: str, *, suffix: str) -> Path:
+        root = self.ensure_dir().resolve(strict=False)
+        path = root / f"{voice_id}{suffix}"
         if path.parent != root:
             raise ValueError("voice_id must resolve inside the configured voices directory.")
         return path
@@ -168,6 +247,9 @@ class VoiceRegistry:
         if not root.is_dir():
             raise NotADirectoryError(f"Configured voices directory is not a directory: {root}")
         return root.resolve(strict=False)
+
+    def _candidate_paths(self, root: Path, voice_id: str) -> list[Path]:
+        return [root / f"{voice_id}{suffix}" for suffix in VOICE_FILE_SUFFIXES]
 
     @staticmethod
     def validate_voice_id(voice_id: str) -> None:
