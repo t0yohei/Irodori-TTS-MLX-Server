@@ -107,11 +107,17 @@ class VoiceRegistry:
         return root
 
     def _create_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        temp_path: Path | None = None
         try:
-            descriptor = os.open(path, flags, 0o644)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                temp_file.write(data)
+            os.link(temp_path, path)
         except FileExistsError as exc:
             raise FileExistsError(
                 f"Voice {voice_id!r} already exists. Use PUT to replace it."
@@ -120,12 +126,9 @@ class VoiceRegistry:
             if exc.errno == errno.ELOOP:
                 raise ValueError("Managed reference voice files must not be symbolic links.") from exc
             raise
-        try:
-            with os.fdopen(descriptor, "wb") as voice_file:
-                voice_file.write(data)
-        except OSError:
-            path.unlink(missing_ok=True)
-            raise
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
     def _replace_file(self, path: Path, data: bytes) -> None:
         if path.is_symlink():

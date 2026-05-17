@@ -269,18 +269,11 @@ def test_voice_upload_reports_storage_errors(monkeypatch, tmp_path) -> None:
     assert response.json()["error"]["code"] == "voice_storage_unavailable"
 
 
-def test_voice_create_removes_partial_file_after_write_failure(monkeypatch, tmp_path) -> None:
-    class FailingVoiceFile:
-        def __enter__(self):
-            return self
+def test_voice_create_removes_partial_file_after_atomic_link_failure(monkeypatch, tmp_path) -> None:
+    def fail_link(*args, **kwargs):
+        raise OSError("disk full")
 
-        def __exit__(self, exc_type, exc_value, traceback):
-            return False
-
-        def write(self, data):
-            raise OSError("disk full")
-
-    monkeypatch.setattr(voice_module.os, "fdopen", lambda *args, **kwargs: FailingVoiceFile())
+    monkeypatch.setattr(voice_module.os, "link", fail_link)
     client = TestClient(
         create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
     )
@@ -294,6 +287,7 @@ def test_voice_create_removes_partial_file_after_write_failure(monkeypatch, tmp_
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "voice_storage_unavailable"
     assert not (tmp_path / "sample.wav").exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_voice_delete_reports_storage_errors(monkeypatch, tmp_path) -> None:
@@ -696,7 +690,33 @@ def test_voice_create_uses_atomic_exclusive_file_creation(tmp_path) -> None:
     assert (tmp_path / "sample.wav").read_bytes() == b"wav"
 
 
-def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
+def test_audio_speech_logs_request_lifecycle_without_request_text(caplog) -> None:
+    caplog.set_level("INFO", logger="irodori_tts_mlx_server.server")
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime))
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "private text should not be logged",
+            "voice": "alloy",
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == 200
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("request_start method=POST path=/v1/audio/speech" in message for message in messages)
+    assert any(
+        "request_end method=POST path=/v1/audio/speech status_code=200" in message
+        for message in messages
+    )
+    assert "private text should not be logged" not in caplog.text
+
+
+def test_audio_speech_times_out_when_synthesis_queue_is_full(caplog) -> None:
+    caplog.set_level("WARNING", logger="irodori_tts_mlx_server.server")
     runtime = BlockingSpeechRuntime()
     client = TestClient(
         create_app(
@@ -732,6 +752,7 @@ def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
         "code": "synthesis_queue_timeout",
     }
     assert first_status == {"status_code": 200}
+    assert "synthesis_queue_timeout queue_timeout_seconds=0.01" in caplog.text
 
 
 def test_audio_speech_allows_zero_queue_timeout_when_slot_is_available() -> None:
@@ -1414,6 +1435,7 @@ def test_default_app_reports_invalid_integer_env_as_runtime_unavailable(monkeypa
         "runtime": "configuration_error",
         "configured": False,
         "loaded": False,
+        "load_state": "failed",
         "model_id": "irodori-tts-mlx",
         "last_load_error": "IRODORI_MLX_TEXT_MAX_LENGTH must be an integer.",
     }

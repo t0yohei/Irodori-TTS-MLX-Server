@@ -120,6 +120,8 @@ The response includes:
 - `status`: process-level health, normally `ok`.
 - `speech_runtime.configured`: whether a weights source is configured.
 - `speech_runtime.loaded`: whether the runtime has loaded successfully.
+- `speech_runtime.load_state`: one of `unconfigured`, `not_loaded`, `loading`,
+  `loaded`, or `failed`; this does not force a lazy model load.
 - `speech_runtime.last_load_error`: present when configuration or runtime load
   failed.
 - `server.auth_enabled`: whether `/v1/*` bearer auth is enabled.
@@ -140,23 +142,31 @@ virtual environment as this server. Keep the process on a machine with enough
 unified memory for the converted weights, tokenizer assets, codec runtime, and
 peak request audio buffers.
 
-Preloading is recommended for unattended processes because it moves missing
-dependency, missing artifact, and invalid config failures to startup. Lazy
-loading is useful during development, but the first speech request will pay the
-load cost and may surface setup errors to the client.
+Preloading is recommended for unattended processes because it exercises missing
+dependency, missing artifact, and invalid config checks before the first client
+request. If preload fails, the process still serves `/health` and returns
+`runtime_unavailable` for synthesis so supervisors and operators can inspect the
+failure. Lazy loading is useful during development, but the first speech request
+will pay the load cost and may surface setup errors to the client.
 
 ## Logs and Common Failures
 
-Uvicorn writes access logs and application errors to stdout/stderr. Under
-launchd, redirect them to files under a writable log directory and rotate them
-with your normal host policy. Avoid logging bearer tokens, request bodies that
-contain private text, or full local filesystem paths in shared channels.
+Uvicorn writes access logs and application errors to stdout/stderr. The server
+also emits consistent application log events for `request_start`, `request_end`,
+`runtime_load_start`, `runtime_load_complete`, `runtime_load_failed`,
+`synthesis_queue_timeout`, and `generation_failed`. These logs include method,
+path, status, timing, queue/runtime state, and failure class, but not request
+text or bearer tokens. Under launchd, redirect them to files under a writable log
+directory and rotate them with your normal host policy. Avoid sharing logs that
+contain private host paths or operational secrets.
 
 Common startup and runtime failures:
 
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | `/health` shows `runtime: unconfigured` | No weights source was set. | Configure one supported weight source from [real_model_setup.md](real_model_setup.md). |
+| `/health` shows `speech_runtime.load_state: "loading"` | The first request or preload is currently building the MLX runtime. | Wait for `loaded` or inspect logs if it changes to `failed`. |
+| `/health` shows `speech_runtime.load_state: "failed"` | Runtime dependency, artifact, or model config loading failed. | Inspect `speech_runtime.last_load_error`, check `runtime_load_failed` logs, and rerun the real setup smoke. |
 | `/health` shows `server.status: "configuration_error"` | Server env parsing failed, commonly an invalid concurrency or queue timeout value. | Check `server.error.message`; fix integer, boolean, or missing server config values. |
 | `/v1/*` returns `server_configuration_error` | Server env parsing failed, commonly an invalid concurrency or queue timeout value. | Fix `IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS` or `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS`, then restart. |
 | `/v1/*` returns `invalid_api_key` | Bearer token is enabled but missing or wrong. | Send `Authorization: Bearer <token>` and verify the active token source. |

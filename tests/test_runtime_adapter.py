@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from io import BytesIO
 from types import SimpleNamespace
+import threading
 import wave
 
 import pytest
@@ -741,6 +742,7 @@ def test_create_default_runtime_reports_preload_failure_as_configuration_error(m
         "runtime": "configuration_error",
         "configured": False,
         "loaded": False,
+        "load_state": "failed",
         "model_id": "custom-model",
         "last_load_error": "preload failed",
     }
@@ -754,3 +756,51 @@ def test_create_default_runtime_reports_preload_failure_as_configuration_error(m
                 speed=1.0,
             )
         )
+
+
+def test_mlx_runtime_manager_reports_loading_and_failed_states() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_module_loader():
+        started.set()
+        if not release.wait(timeout=2):
+            raise AssertionError("test did not release runtime loader")
+        raise RuntimeUnavailableError("load failed")
+
+    manager = IrodoriMLXRuntimeManager(
+        IrodoriRuntimeConfig(weights_repo="owner/repo"),
+        module_loader=blocking_module_loader,
+    )
+    failure: list[str] = []
+
+    def generate() -> None:
+        try:
+            manager.generate_speech(
+                SpeechGenerationRequest(
+                    model="irodori-tts-mlx",
+                    input="hello",
+                    voice="alloy",
+                    response_format="wav",
+                    speed=1.0,
+                )
+            )
+        except RuntimeUnavailableError as exc:
+            failure.append(str(exc))
+
+    thread = threading.Thread(target=generate)
+    thread.start()
+    assert started.wait(timeout=2)
+    try:
+        loading_status = manager.status_metadata()
+        assert loading_status["loaded"] is False
+        assert loading_status["load_state"] == "loading"
+    finally:
+        release.set()
+        thread.join(timeout=2)
+
+    assert failure == ["load failed"]
+    failed_status = manager.status_metadata()
+    assert failed_status["loaded"] is False
+    assert failed_status["load_state"] == "failed"
+    assert failed_status["last_load_error"] == "load failed"

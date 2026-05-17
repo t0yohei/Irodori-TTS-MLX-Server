@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 import tempfile
 import threading
@@ -24,6 +25,7 @@ DEFAULT_TAIL_SILENCE_KEEP_MS = 40
 DEFAULT_TAIL_SILENCE_THRESHOLD = 256
 WAV_MEDIA_TYPE = "audio/wav"
 LORA_ADAPTER_OPTION = "lora_adapter"
+logger = logging.getLogger("irodori_tts_mlx_server.runtime")
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ class UnconfiguredSpeechRuntime:
             "runtime": "unconfigured",
             "configured": False,
             "loaded": False,
+            "load_state": "unconfigured",
             "model_id": "irodori-tts-mlx",
         }
 
@@ -98,6 +101,7 @@ class InvalidConfigurationSpeechRuntime:
             "runtime": "configuration_error",
             "configured": False,
             "loaded": False,
+            "load_state": "failed",
             "model_id": self.model_id,
             "last_load_error": self.message,
         }
@@ -485,6 +489,7 @@ class IrodoriMLXRuntimeManager:
         self._runtime: Any | None = None
         self._runtime_lock = threading.Lock()
         self._load_error: str | None = None
+        self._loading = False
         if config.preload:
             self._get_runtime()
 
@@ -501,10 +506,20 @@ class IrodoriMLXRuntimeManager:
             "runtime": "irodori-tts-mlx",
             "configured": self.config.configured,
             "loaded": self._runtime is not None,
+            "load_state": self._load_state(),
             "model_id": self.config.model_id,
             "weights_source": source,
             "last_load_error": self._load_error,
         }
+
+    def _load_state(self) -> str:
+        if self._runtime is not None:
+            return "loaded"
+        if self._loading:
+            return "loading"
+        if self._load_error is not None:
+            return "failed"
+        return "not_loaded"
 
     def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
         _reject_unsupported_lora_adapter(dict(request.irodori))
@@ -586,15 +601,27 @@ class IrodoriMLXRuntimeManager:
             if self._runtime is not None:
                 return self._runtime
             try:
+                self._loading = True
+                logger.info(
+                    "runtime_load_start model_id=%s preload=%s configured=%s",
+                    self.config.model_id,
+                    self.config.preload,
+                    self.config.configured,
+                )
                 self._runtime = self._build_runtime()
             except RuntimeUnavailableError as exc:
                 self._load_error = str(exc)
+                logger.error("runtime_load_failed model_id=%s error=%s", self.config.model_id, exc)
                 raise
             except (OSError, ValueError, RuntimeError) as exc:
                 message = f"Irodori-TTS-MLX runtime could not be loaded: {exc}"
                 self._load_error = message
+                logger.error("runtime_load_failed model_id=%s error=%s", self.config.model_id, exc)
                 raise RuntimeUnavailableError(message) from exc
+            finally:
+                self._loading = False
             self._load_error = None
+            logger.info("runtime_load_complete model_id=%s", self.config.model_id)
             return self._runtime
 
     def _build_runtime(self) -> Any:
