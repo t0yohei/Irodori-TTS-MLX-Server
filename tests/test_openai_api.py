@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import importlib
 import io
 import os
@@ -343,6 +344,25 @@ def test_voice_create_removes_partial_file_after_atomic_link_failure(monkeypatch
     assert response.json()["error"]["code"] == "voice_storage_unavailable"
     assert not (tmp_path / "sample.wav").exists()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_voice_create_falls_back_when_hard_links_are_unsupported(monkeypatch, tmp_path) -> None:
+    def fail_link(*args, **kwargs):
+        raise OSError(errno.EOPNOTSUPP, "operation not supported")
+
+    monkeypatch.setattr(voice_module.os, "link", fail_link)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+
+    assert response.status_code == 201
+    assert (tmp_path / "sample.wav").read_bytes() == b"wav"
 
 
 def test_voice_delete_reports_storage_errors(monkeypatch, tmp_path) -> None:
