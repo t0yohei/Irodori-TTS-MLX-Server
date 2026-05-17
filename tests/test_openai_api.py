@@ -915,6 +915,34 @@ def test_audio_speech_logs_request_lifecycle_without_request_text(caplog) -> Non
     assert "private text should not be logged" not in caplog.text
 
 
+def test_audio_speech_logs_request_end_when_unexpected_error_raises(caplog) -> None:
+    class CrashingRuntime(MockSpeechRuntime):
+        def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
+            raise RuntimeError("boom")
+
+    caplog.set_level("INFO", logger="irodori_tts_mlx_server.server")
+    client = TestClient(create_app(runtime=CrashingRuntime()), raise_server_exceptions=False)
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "private text should not be logged",
+            "voice": "alloy",
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == 500
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("request_start method=POST path=/v1/audio/speech" in message for message in messages)
+    assert any(
+        "request_end method=POST path=/v1/audio/speech status_code=500" in message
+        for message in messages
+    )
+    assert "private text should not be logged" not in caplog.text
+
+
 def test_voice_create_keeps_voice_id_unique_across_extensions(tmp_path) -> None:
     registry = VoiceRegistry(tmp_path)
     barrier = threading.Barrier(2)

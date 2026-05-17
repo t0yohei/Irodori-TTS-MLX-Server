@@ -505,21 +505,25 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
     @app.middleware("http")
     async def authenticate_openai_routes(api_request: Request, call_next: Any) -> Response:
         started_at = time.monotonic()
+        status_code = 500
         logger.info("request_start method=%s path=%s", api_request.method, api_request.url.path)
         try:
             if api_request.url.path.startswith("/v1/"):
                 _require_bearer_auth(server_config, api_request)
                 _install_voice_upload_size_guard(server_config, api_request)
             response = await call_next(api_request)
+            status_code = response.status_code
         except HTTPException as exc:
             response = _authentication_error_response(exc)
-        logger.info(
-            "request_end method=%s path=%s status_code=%s duration_ms=%.1f",
-            api_request.method,
-            api_request.url.path,
-            response.status_code,
-            (time.monotonic() - started_at) * 1000,
-        )
+            status_code = response.status_code
+        finally:
+            logger.info(
+                "request_end method=%s path=%s status_code=%s duration_ms=%.1f",
+                api_request.method,
+                api_request.url.path,
+                status_code,
+                (time.monotonic() - started_at) * 1000,
+            )
         return response
 
     @app.exception_handler(HTTPException)
