@@ -14,6 +14,7 @@ from irodori_tts_mlx_server.runtime import (
     SpeechGenerationRequest,
     SpeechGenerationResult,
 )
+from irodori_tts_mlx_server.voices import VoiceRegistry
 
 
 def wav_bytes(pcm: bytes = bytes([1, 2, 3, 4])) -> bytes:
@@ -277,7 +278,7 @@ def test_managed_voice_does_not_override_explicit_irodori_reference_options(tmp_
     assert runtime.requests[-1].irodori == {"no_reference": True, "caption": "calm"}
 
 
-@pytest.mark.parametrize("voice", ["my.voice", "voice:v1"])
+@pytest.mark.parametrize("voice", ["../sample", "my.voice", "voice:v1"])
 def test_audio_speech_treats_unmanaged_punctuated_voice_as_reference_miss(
     tmp_path, voice
 ) -> None:
@@ -297,6 +298,55 @@ def test_audio_speech_treats_unmanaged_punctuated_voice_as_reference_miss(
     assert response.status_code == 200
     assert runtime.requests[-1].voice == voice
     assert runtime.requests[-1].irodori == {}
+
+
+def test_voice_replace_rejects_symlink_without_overwriting_target(tmp_path) -> None:
+    outside_target = tmp_path / "outside.wav"
+    outside_target.write_bytes(b"outside")
+    voice_path = tmp_path / "sample.wav"
+    voice_path.symlink_to(outside_target)
+
+    with pytest.raises(ValueError, match="symbolic links"):
+        VoiceRegistry(tmp_path).write_file(
+            voice_id="sample",
+            filename="sample.wav",
+            data=b"replacement",
+            replace=True,
+        )
+
+    assert outside_target.read_bytes() == b"outside"
+
+
+def test_voice_create_uses_atomic_exclusive_file_creation(tmp_path) -> None:
+    registry = VoiceRegistry(tmp_path)
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def create_voice() -> None:
+        barrier.wait(timeout=2)
+        try:
+            registry.write_file(
+                voice_id="sample",
+                filename="sample.wav",
+                data=b"wav",
+                replace=False,
+            )
+        except FileExistsError:
+            outcome = "exists"
+        else:
+            outcome = "created"
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=create_voice) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert sorted(outcomes) == ["created", "exists"]
+    assert (tmp_path / "sample.wav").read_bytes() == b"wav"
 
 
 def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:

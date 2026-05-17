@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,9 +72,22 @@ class VoiceRegistry:
             raise ValueError("Voice file must not be empty.")
 
         path = self._path_for(voice_id)
-        if path.exists() and not replace:
-            raise FileExistsError(f"Voice {voice_id!r} already exists. Use PUT to replace it.")
-        path.write_bytes(data)
+        flags = os.O_WRONLY | os.O_CREAT
+        flags |= os.O_TRUNC if replace else os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(path, flags, 0o644)
+        except FileExistsError as exc:
+            raise FileExistsError(
+                f"Voice {voice_id!r} already exists. Use PUT to replace it."
+            ) from exc
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise ValueError("Managed reference voice files must not be symbolic links.") from exc
+            raise
+        with os.fdopen(descriptor, "wb") as voice_file:
+            voice_file.write(data)
         return VoiceFile(voice_id=voice_id, path=path)
 
     def delete_file(self, voice_id: str) -> bool:
@@ -89,14 +104,14 @@ class VoiceRegistry:
 
     def _path_for(self, voice_id: str) -> Path:
         root = self.ensure_dir().resolve(strict=False)
-        path = (root / f"{voice_id}{VOICE_FILE_SUFFIX}").resolve(strict=False)
+        path = root / f"{voice_id}{VOICE_FILE_SUFFIX}"
         if path.parent != root:
             raise ValueError("voice_id must resolve inside the configured voices directory.")
         return path
 
     def _path_for_existing_root(self, voice_id: str) -> Path:
         root = self.root.resolve(strict=False)
-        path = (root / f"{voice_id}{VOICE_FILE_SUFFIX}").resolve(strict=False)
+        path = root / f"{voice_id}{VOICE_FILE_SUFFIX}"
         if path.parent != root:
             raise ValueError("voice_id must resolve inside the configured voices directory.")
         return path

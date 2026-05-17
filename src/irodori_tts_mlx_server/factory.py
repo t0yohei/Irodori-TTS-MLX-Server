@@ -175,7 +175,10 @@ def _apply_managed_voice_reference(
     if not voice_registry.is_managed_voice_id(request.voice):
         return irodori_options
 
-    voice_file = voice_registry.get_file(request.voice)
+    try:
+        voice_file = voice_registry.get_file(request.voice)
+    except ValueError:
+        return irodori_options
     if voice_file is None:
         return irodori_options
 
@@ -411,10 +414,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                 param="response_format",
                 code=exc.code,
             ) from exc
-        try:
-            irodori_options = _apply_managed_voice_reference(request, voice_registry)
-        except ValueError as exc:
-            raise openai_error(str(exc), status_code=400, param="voice", code="invalid_voice")
+        irodori_options = _apply_managed_voice_reference(request, voice_registry)
         generation_request = SpeechGenerationRequest(
             model=request.model,
             input=request.input,
