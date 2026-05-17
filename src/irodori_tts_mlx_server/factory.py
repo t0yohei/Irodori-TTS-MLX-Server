@@ -158,9 +158,22 @@ UNSUPPORTED_IRODORI_OPTIONS = {
 
 
 def _set_irodori_option(options: dict[str, Any], canonical: str, value: Any, *, alias: str) -> None:
-    if canonical in options and options[canonical] != value:
+    if canonical in options and not _irodori_option_values_match(
+        canonical, options[canonical], value
+    ):
         raise ValueError(f"{alias} conflicts with irodori.{canonical}.")
     options[canonical] = value
+
+
+def _irodori_option_values_match(canonical: str, current: Any, incoming: Any) -> bool:
+    if current == incoming:
+        return True
+    if canonical in {"no_reference", "no_context_kv_cache", "chunking"}:
+        current_bool = _bool_like_option(current)
+        incoming_bool = _bool_like_option(incoming)
+        if current_bool is not None and incoming_bool is not None:
+            return current_bool is incoming_bool
+    return False
 
 
 def _set_inverted_irodori_option(

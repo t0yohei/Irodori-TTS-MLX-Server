@@ -975,6 +975,42 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("payload_patch", "expected_irodori"),
+    [
+        (
+            {"no_ref": False, "irodori": {"no_reference": "false"}},
+            {"no_reference": False},
+        ),
+        (
+            {"context_kv_cache": True, "irodori": {"no_context_kv_cache": "false"}},
+            {"no_context_kv_cache": False},
+        ),
+        (
+            {"chunking_enabled": False, "irodori": {"chunking": "false"}},
+            {"chunking": False},
+        ),
+    ],
+)
+def test_audio_speech_accepts_semantically_equal_bool_alias_values(
+    payload_patch, expected_irodori
+) -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "voicedesign",
+            "response_format": "wav",
+        }
+        | payload_patch,
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[0].irodori == expected_irodori
+
+
 @pytest.mark.parametrize("unsupported", ["ref_latent", "chunk_min_chars"])
 def test_audio_speech_rejects_unsupported_upstream_irodori_options(unsupported) -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
