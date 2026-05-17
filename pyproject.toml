@@ -29,6 +29,9 @@ packages = ["src/irodori_tts_mlx_server"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "real_mlx: opt-in smoke tests that require Irodori-TTS-MLX runtime dependencies and converted weights",
+]
 
 [tool.ruff]
 line-length = 100

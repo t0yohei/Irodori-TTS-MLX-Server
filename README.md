@@ -201,3 +201,63 @@ Run lint:
 ```bash
 ruff check .
 ```
+
+### Opt-in Real MLX Runtime Smoke
+
+Normal `pytest` runs do not require model weights, the Irodori-TTS-MLX runtime
+package, upstream Irodori-TTS, tokenizer assets, or codec artifacts. The real
+runtime smoke test is skipped unless explicitly enabled and configured.
+
+The shortest currently documented converted-weights source for VoiceDesign
+no-reference/caption smoke testing is the approved hosted layout
+`t0yohei/Irodori-TTS-MLX-500M-v2-VoiceDesign`, as documented by
+Irodori-TTS-MLX's hosted weights usage guide. Equivalent local hosted layouts can
+be supplied with `IRODORI_MLX_WEIGHTS_DIR`, or direct converted `.npz` weights
+with `IRODORI_MLX_WEIGHTS_PATH` plus `IRODORI_MLX_MODEL_CONFIG_JSON`.
+
+Install the server, development tools, Irodori-TTS-MLX runtime extras, and the
+upstream Irodori-TTS package in the same environment before running the smoke:
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pip install -e /path/to/Irodori-TTS-MLX"[runtime]"
+python -m pip install -e /path/to/Irodori-TTS
+```
+
+Run the opt-in pytest smoke with hosted converted VoiceDesign weights:
+
+```bash
+PYTHONPATH=/path/to/Irodori-TTS:${PYTHONPATH:-} \
+IRODORI_REAL_MLX_SMOKE=1 \
+IRODORI_MLX_WEIGHTS_REPO=t0yohei/Irodori-TTS-MLX-500M-v2-VoiceDesign \
+IRODORI_MLX_CODEC_RUNTIME_MODE=persistent \
+pytest -m real_mlx tests/test_real_mlx_smoke.py
+```
+
+The test constructs the FastAPI app with the real runtime configuration, calls
+`POST /v1/audio/speech` with `voice=voicedesign`,
+`irodori.no_reference=true`, and a caption, then verifies the response is valid
+WAV audio with non-empty PCM frames.
+
+To validate through a running local server instead of pytest:
+
+```bash
+PYTHONPATH=/path/to/Irodori-TTS:${PYTHONPATH:-} \
+IRODORI_MLX_WEIGHTS_REPO=t0yohei/Irodori-TTS-MLX-500M-v2-VoiceDesign \
+IRODORI_MLX_CODEC_RUNTIME_MODE=persistent \
+python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000
+
+curl http://127.0.0.1:8000/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"irodori-tts-mlx","input":"こんにちは。これは実行時スモークテストです。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"落ち着いた明瞭なナレーション","preset":"fast","chunking":false}}' \
+  --output /tmp/irodori-real-mlx-smoke.wav
+
+python - <<'PY'
+from pathlib import Path
+from wave import open as open_wav
+
+with open_wav(str(Path("/tmp/irodori-real-mlx-smoke.wav")), "rb") as wav_file:
+    assert wav_file.getnframes() > 0
+    assert wav_file.readframes(wav_file.getnframes())
+PY
+```
