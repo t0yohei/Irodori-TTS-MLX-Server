@@ -192,6 +192,7 @@ templates:
 
 ```bash
 mkdir -p /opt/irodori-tts-mlx-data/voices /opt/irodori-tts-mlx-data/logs
+mkdir -p ~/Library/LaunchAgents
 cp deployment/local.env.example /opt/irodori-tts-mlx-data/local.env
 cp deployment/dev.irodori.tts-mlx-server.plist.template \
   ~/Library/LaunchAgents/dev.irodori.tts-mlx-server.plist
