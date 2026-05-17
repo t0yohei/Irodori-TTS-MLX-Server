@@ -719,6 +719,42 @@ def test_voice_create_uses_atomic_exclusive_file_creation(tmp_path) -> None:
     assert (tmp_path / "sample.wav").read_bytes() == b"wav"
 
 
+def test_voice_create_keeps_voice_id_unique_across_extensions(tmp_path) -> None:
+    registry = VoiceRegistry(tmp_path)
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def create_voice(filename: str, data: bytes) -> None:
+        barrier.wait(timeout=2)
+        try:
+            registry.write_file(
+                voice_id="sample",
+                filename=filename,
+                data=data,
+                replace=False,
+            )
+        except FileExistsError:
+            outcome = "exists"
+        else:
+            outcome = filename
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [
+        threading.Thread(target=create_voice, args=("sample.wav", b"wav")),
+        threading.Thread(target=create_voice, args=("sample.flac", b"flac")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert sorted(outcomes) in (["exists", "sample.flac"], ["exists", "sample.wav"])
+    assert len(list(tmp_path.glob("sample.*"))) == 1
+    assert not (tmp_path / ".sample.create.lock").exists()
+
+
 def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
     runtime = BlockingSpeechRuntime()
     client = TestClient(

@@ -99,7 +99,7 @@ class VoiceRegistry:
         if replace:
             self._replace_file(path, data, voice_id=voice_id)
         else:
-            self._create_file(path, data, voice_id=voice_id)
+            self._create_unique_file(path, data, voice_id=voice_id)
         return VoiceFile(voice_id=voice_id, path=path)
 
     def delete_file(self, voice_id: str) -> bool:
@@ -139,6 +139,18 @@ class VoiceRegistry:
         except OSError:
             path.unlink(missing_ok=True)
             raise
+
+    def _create_unique_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
+        lock_path = path.parent / f".{voice_id}.create.lock"
+        self._create_file(lock_path, b"", voice_id=voice_id)
+        try:
+            if self.get_file(voice_id) is not None:
+                raise FileExistsError(
+                    f"Voice {voice_id!r} already exists. Use PUT to replace it."
+                )
+            self._create_file(path, data, voice_id=voice_id)
+        finally:
+            lock_path.unlink(missing_ok=True)
 
     def _replace_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
         for candidate in self._candidate_paths(path.parent, voice_id):
