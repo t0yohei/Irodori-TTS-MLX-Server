@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import plistlib
 import re
 from pathlib import Path
 
@@ -80,11 +81,72 @@ def test_deployment_doc_covers_operational_configuration() -> None:
         "runtime_unavailable",
         "server_configuration_error",
         "launchd",
+        "deployment/dev.irodori.tts-mlx-server.plist.template",
+        "deployment/local.env.example",
+        "plutil -lint",
+        "launchctl print",
+        "kickstart",
+        "Apple Silicon",
+        "Docker and",
+        "Compose are intentionally not the default path",
         "StandardOutPath",
         "StandardErrorPath",
         "real_model_setup.md",
     ):
         assert required in doc
+
+
+def test_packaged_local_deployment_templates_stay_consistent() -> None:
+    doc = (ROOT / "docs" / "deployment.md").read_text()
+    plist_path = ROOT / "deployment" / "dev.irodori.tts-mlx-server.plist.template"
+    env_path = ROOT / "deployment" / "local.env.example"
+
+    assert plist_path.name in doc
+    assert env_path.name in doc
+
+    plist = plistlib.loads(plist_path.read_bytes())
+    assert plist["Label"] == "dev.irodori.tts-mlx-server"
+    assert plist["ProgramArguments"] == [
+        "/opt/irodori-tts-mlx-server/.venv/bin/irodori-tts-mlx-server",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+    ]
+    assert plist["RunAtLoad"] is True
+    assert plist["KeepAlive"] is True
+    assert plist["StandardOutPath"].endswith("/logs/server.log")
+    assert plist["StandardErrorPath"].endswith("/logs/server.err.log")
+    assert "/opt/irodori-tts-mlx-data/" in plist["StandardOutPath"]
+    assert "/opt/irodori-tts-mlx-data/" in plist["StandardErrorPath"]
+
+    environment = plist["EnvironmentVariables"]
+    env_example = env_path.read_text()
+    for required in (
+        "IRODORI_MLX_WEIGHTS_DIR",
+        "IRODORI_MLX_PRELOAD",
+        "IRODORI_MLX_MODEL_ID",
+        "IRODORI_MLX_CODEC_RUNTIME_MODE",
+        "IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS",
+        "IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS",
+        "IRODORI_SERVER_VOICES_DIR",
+        "IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES",
+    ):
+        assert required in environment
+        assert required in env_example
+
+    assert environment["IRODORI_SERVER_VOICES_DIR"] == "/opt/irodori-tts-mlx-data/voices"
+    assert "/opt/irodori-tts-mlx-server/voices" not in env_example
+    assert "/opt/irodori-tts-mlx-server/local.env" not in doc
+
+    for required in (
+        "IRODORI_SERVER_BEARER_TOKEN",
+        "IRODORI_API_KEY",
+        "IRODORI_MLX_CODEC_DEVICE",
+        "IRODORI_MLX_CODEC_RUNTIME_MODE=persistent",
+    ):
+        assert required in env_example
+
 
 def test_openai_client_examples_python_snippets_parse() -> None:
     doc = (ROOT / "docs" / "openai_client_examples.md").read_text()
