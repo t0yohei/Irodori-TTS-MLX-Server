@@ -169,6 +169,7 @@ class VoiceRegistry:
             flags |= os.O_NOFOLLOW
         fd: int | None = None
         created = False
+        write_failed = False
         try:
             fd = os.open(path, flags, 0o600)
             created = True
@@ -180,6 +181,7 @@ class VoiceRegistry:
                 f"Voice {voice_id!r} already exists. Use PUT to replace it."
             ) from exc
         except OSError as exc:
+            write_failed = True
             if exc.errno == errno.ELOOP:
                 raise ValueError("Managed reference voice files must not be symbolic links.") from exc
             raise
@@ -188,7 +190,7 @@ class VoiceRegistry:
                 os.close(fd)
             if created:
                 try:
-                    if path.stat().st_size != len(data):
+                    if write_failed or path.stat().st_size != len(data):
                         path.unlink(missing_ok=True)
                 except OSError:
                     path.unlink(missing_ok=True)

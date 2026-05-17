@@ -365,6 +365,57 @@ def test_voice_create_falls_back_when_hard_links_are_unsupported(monkeypatch, tm
     assert (tmp_path / "sample.wav").read_bytes() == b"wav"
 
 
+def test_voice_create_removes_fallback_file_when_close_fails(monkeypatch, tmp_path) -> None:
+    def fail_link(*args, **kwargs):
+        raise OSError(errno.EOPNOTSUPP, "operation not supported")
+
+    original_fdopen = voice_module.os.fdopen
+
+    class FailingCloseFile:
+        def __init__(self, file):
+            self.file = file
+
+        def __enter__(self):
+            self.file.__enter__()
+            return self
+
+        def __exit__(self, *exc_info):
+            self.file.__exit__(*exc_info)
+            raise OSError(errno.ENOSPC, "no space left")
+
+        def write(self, data):
+            return self.file.write(data)
+
+    def fail_fdopen(*args, **kwargs):
+        return FailingCloseFile(original_fdopen(*args, **kwargs))
+
+    monkeypatch.setattr(voice_module.os, "link", fail_link)
+    monkeypatch.setattr(voice_module.os, "fdopen", fail_fdopen)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+    assert not (tmp_path / "sample.wav").exists()
+
+    monkeypatch.setattr(voice_module.os, "fdopen", original_fdopen)
+    retry_response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+
+    assert retry_response.status_code == 201
+    assert (tmp_path / "sample.wav").read_bytes() == b"wav"
+
+
 def test_voice_delete_reports_storage_errors(monkeypatch, tmp_path) -> None:
     def fail_delete_file(*args, **kwargs):
         raise PermissionError("permission denied")
