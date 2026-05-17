@@ -55,7 +55,7 @@ class VoiceRegistry:
             for path in sorted(root.iterdir(), key=lambda item: item.name)
             if not path.is_symlink()
             and path.is_file()
-            and path.suffix.lower() == VOICE_FILE_SUFFIX
+            and path.suffix == VOICE_FILE_SUFFIX
             and self.is_managed_voice_id(path.stem)
         ]
 

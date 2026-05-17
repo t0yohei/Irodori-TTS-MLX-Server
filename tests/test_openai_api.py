@@ -339,6 +339,7 @@ def test_voice_list_ignores_wav_files_with_unmanaged_ids(tmp_path) -> None:
     voices_dir.mkdir()
     (voices_dir / "sample.wav").write_bytes(b"wav")
     (voices_dir / "speaker.v1.wav").write_bytes(b"wav")
+    (voices_dir / "upper.WAV").write_bytes(b"wav")
 
     response = TestClient(
         create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=voices_dir))
