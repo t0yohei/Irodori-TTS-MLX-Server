@@ -58,6 +58,34 @@ def test_openai_client_examples_cover_common_usage_paths() -> None:
         assert required in doc
 
 
+def test_deployment_doc_covers_operational_configuration() -> None:
+    doc = (ROOT / "docs" / "deployment.md").read_text()
+    readme = (ROOT / "README.md").read_text()
+
+    assert "docs/deployment.md" in readme
+    for required in (
+        "Apple Silicon",
+        "python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000",
+        "IRODORI_SERVER_BEARER_TOKEN",
+        "test -n \"$IRODORI_SERVER_BEARER_TOKEN\"",
+        "IRODORI_API_KEY",
+        "Authorization: Bearer",
+        "IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS",
+        "IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS",
+        "synthesis_queue_timeout",
+        "curl --fail http://127.0.0.1:8000/health",
+        "server.max_concurrent_synthesis",
+        "server.status",
+        "server.error.code",
+        "runtime_unavailable",
+        "server_configuration_error",
+        "launchd",
+        "StandardOutPath",
+        "StandardErrorPath",
+        "real_model_setup.md",
+    ):
+        assert required in doc
+
 def test_openai_client_examples_python_snippets_parse() -> None:
     doc = (ROOT / "docs" / "openai_client_examples.md").read_text()
 

@@ -94,6 +94,9 @@ commands, speech `curl` example, and common error codes.
 See [docs/openai_client_examples.md](docs/openai_client_examples.md) for
 OpenAI-compatible `curl` and Python client examples, including bearer auth,
 FFmpeg-backed response formats, and unsupported streaming behavior.
+See [docs/deployment.md](docs/deployment.md) for production-ish local deployment
+guidance covering Apple Silicon host assumptions, bearer auth, queue controls,
+health checks, logs, and a launchd example.
 
 Configure the real MLX runtime with either a hosted converted-weights layout:
 
