@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import io
+import os
 import threading
 import time
 import wave
@@ -236,6 +237,25 @@ def test_voice_upload_accepts_managed_non_wav_and_voice_object_resolution(tmp_pa
         "reference_wav": str(tmp_path / "voices" / "sample.flac"),
         "no_reference": False,
     }
+
+
+@pytest.mark.parametrize("voice", [{"id": False}, {"id": {"nested": "sample"}}, {"id": ""}, False])
+def test_audio_speech_rejects_non_string_voice_object_ids(tmp_path, voice) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": voice,
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == 422
+    assert runtime.requests == []
 
 
 def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(tmp_path) -> None:
@@ -773,6 +793,24 @@ def test_voice_create_keeps_voice_id_unique_across_extensions(tmp_path) -> None:
     assert sorted(outcomes) in (["exists", "sample.flac"], ["exists", "sample.wav"])
     assert len(list(tmp_path.glob("sample.*"))) == 1
     assert not (tmp_path / ".sample.create.lock").exists()
+
+
+def test_voice_create_recovers_stale_lock_when_voice_file_is_absent(tmp_path) -> None:
+    lock_path = tmp_path / ".sample.create.lock"
+    lock_path.write_bytes(b"")
+    stale_time = time.time() - voice_module.STALE_CREATE_LOCK_SECONDS - 1
+    os.utime(lock_path, (stale_time, stale_time))
+
+    voice_file = VoiceRegistry(tmp_path).write_file(
+        voice_id="sample",
+        filename="sample.flac",
+        data=b"flac",
+        replace=False,
+    )
+
+    assert voice_file.path == tmp_path / "sample.flac"
+    assert voice_file.path.read_bytes() == b"flac"
+    assert not lock_path.exists()
 
 
 def test_voice_list_and_delete_handle_preexisting_duplicate_extensions(tmp_path) -> None:

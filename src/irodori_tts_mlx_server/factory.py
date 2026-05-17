@@ -67,16 +67,18 @@ class AudioSpeechRequest(BaseModel):
     irodori: dict[str, Any] = Field(default_factory=dict)
     stream: bool = False
 
-    @field_validator("voice")
+    @field_validator("voice", mode="before")
     @classmethod
-    def validate_voice(cls, value: str | dict[str, Any]) -> str | dict[str, Any]:
+    def validate_voice(cls, value: Any) -> str | dict[str, Any]:
         if isinstance(value, str):
             if not value:
                 raise ValueError("String should have at least 1 character")
             return value
+        if not isinstance(value, dict):
+            raise ValueError("voice must be a non-empty string or object with a string id")
         raw = value.get("id")
-        if raw is None or str(raw) == "":
-            raise ValueError("voice object must include a non-empty id")
+        if not isinstance(raw, str) or not raw:
+            raise ValueError("voice object must include a non-empty string id")
         return value
 
 
@@ -303,9 +305,9 @@ def _voice_id_from_request(voice: str | dict[str, Any]) -> str | None:
     if isinstance(voice, str):
         return voice
     raw = voice.get("id")
-    if raw is None:
+    if not isinstance(raw, str) or not raw:
         return None
-    return str(raw)
+    return raw
 
 
 def _runtime_voice_from_request(voice: str | dict[str, Any]) -> str:

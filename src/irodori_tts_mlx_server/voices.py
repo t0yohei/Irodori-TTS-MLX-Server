@@ -5,7 +5,9 @@ from __future__ import annotations
 import errno
 import os
 import re
+import stat as stat_module
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,7 @@ VOICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 VOICE_FILE_SUFFIX = ".wav"
 VOICE_FILE_SUFFIXES = (".wav", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".aac", ".webm")
 LATENT_FILE_SUFFIXES = (".pt", ".pth")
+STALE_CREATE_LOCK_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -151,7 +154,7 @@ class VoiceRegistry:
 
     def _create_unique_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
         lock_path = path.parent / f".{voice_id}.create.lock"
-        self._create_file(lock_path, b"", voice_id=voice_id)
+        self._create_create_lock(lock_path, voice_id=voice_id)
         try:
             if self.get_file(voice_id) is not None:
                 raise FileExistsError(
@@ -160,6 +163,24 @@ class VoiceRegistry:
             self._create_file(path, data, voice_id=voice_id)
         finally:
             lock_path.unlink(missing_ok=True)
+
+    def _create_create_lock(self, lock_path: Path, *, voice_id: str) -> None:
+        try:
+            self._create_file(lock_path, b"", voice_id=voice_id)
+            return
+        except FileExistsError:
+            if self.get_file(voice_id) is not None:
+                raise
+            try:
+                stat = lock_path.lstat()
+            except FileNotFoundError:
+                self._create_file(lock_path, b"", voice_id=voice_id)
+                return
+            age_seconds = time.time() - stat.st_mtime
+            if not stat_module.S_ISREG(stat.st_mode) or age_seconds < STALE_CREATE_LOCK_SECONDS:
+                raise
+            lock_path.unlink(missing_ok=True)
+        self._create_file(lock_path, b"", voice_id=voice_id)
 
     def _replace_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
         for candidate in self._candidate_paths(path.parent, voice_id):
