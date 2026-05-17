@@ -91,6 +91,9 @@ Expected response:
 See [docs/real_model_setup.md](docs/real_model_setup.md) for the full fresh
 checkout setup walkthrough, converted-weights layout contract, local run
 commands, speech `curl` example, and common error codes.
+See [docs/deployment.md](docs/deployment.md) for production-ish local deployment
+guidance covering Apple Silicon host assumptions, bearer auth, queue controls,
+health checks, logs, and a launchd example.
 
 Configure the real MLX runtime with either a hosted converted-weights layout:
 
