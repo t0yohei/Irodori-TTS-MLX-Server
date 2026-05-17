@@ -19,7 +19,9 @@ source .venv/bin/activate
 
 export IRODORI_MLX_WEIGHTS_DIR=/opt/irodori-models/voicedesign-v2
 export IRODORI_MLX_PRELOAD=1
-export IRODORI_SERVER_BEARER_TOKEN="$(security find-generic-password -a irodori-tts-mlx-server -s irodori-server-token -w)"
+IRODORI_SERVER_BEARER_TOKEN="$(security find-generic-password -a irodori-tts-mlx-server -s irodori-server-token -w)"
+test -n "$IRODORI_SERVER_BEARER_TOKEN"
+export IRODORI_SERVER_BEARER_TOKEN
 export IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS=1
 export IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS=60
 
