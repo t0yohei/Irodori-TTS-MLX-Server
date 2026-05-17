@@ -133,7 +133,6 @@ IRODORI_OPTION_ALIASES = {
 
 UNSUPPORTED_IRODORI_OPTIONS = {
     "ref_latent",
-    "lora_adapter",
     "chunk_min_chars",
     "min_seconds",
     "max_seconds",

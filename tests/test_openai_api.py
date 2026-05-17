@@ -57,6 +57,13 @@ class InvalidOptionsRuntime(MockSpeechRuntime):
         raise RuntimeRequestError("irodori.num_steps must be > 0.")
 
 
+class UnsupportedLoraRuntime(MockSpeechRuntime):
+    def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
+        raise RuntimeRequestError(
+            "irodori.lora_adapter is not supported by the current Irodori-TTS-MLX runtime boundary."
+        )
+
+
 class BlockingSpeechRuntime(MockSpeechRuntime):
     def __init__(self) -> None:
         super().__init__()
@@ -968,7 +975,7 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases() -> None:
     }
 
 
-@pytest.mark.parametrize("unsupported", ["lora_adapter", "ref_latent", "chunk_min_chars"])
+@pytest.mark.parametrize("unsupported", ["ref_latent", "chunk_min_chars"])
 def test_audio_speech_rejects_unsupported_upstream_irodori_options(unsupported) -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
         "/v1/audio/speech",
@@ -1266,6 +1273,27 @@ def test_audio_speech_rejects_invalid_irodori_runtime_options() -> None:
     assert response.status_code == 400
     assert response.json()["error"] == {
         "message": "irodori.num_steps must be > 0.",
+        "type": "invalid_request_error",
+        "param": "irodori",
+        "code": "invalid_irodori_options",
+    }
+
+
+def test_audio_speech_rejects_unsupported_lora_adapter_with_openai_error_shape() -> None:
+    response = TestClient(create_app(runtime=UnsupportedLoraRuntime())).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+            "irodori": {"lora_adapter": "warm-narration"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "message": "irodori.lora_adapter is not supported by the current Irodori-TTS-MLX runtime boundary.",
         "type": "invalid_request_error",
         "param": "irodori",
         "code": "invalid_irodori_options",
