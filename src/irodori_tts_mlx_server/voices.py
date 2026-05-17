@@ -50,7 +50,9 @@ class VoiceRegistry:
         return [
             VoiceFile(voice_id=path.stem, path=path)
             for path in sorted(root.iterdir(), key=lambda item: item.name)
-            if path.is_file() and path.suffix.lower() == VOICE_FILE_SUFFIX
+            if path.is_file()
+            and path.suffix.lower() == VOICE_FILE_SUFFIX
+            and self.is_managed_voice_id(path.stem)
         ]
 
     def get_file(self, voice_id: str) -> VoiceFile | None:

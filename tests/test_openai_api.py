@@ -99,6 +99,16 @@ def test_openai_routes_require_bearer_token_when_configured() -> None:
         },
     )
     voices_response = client.get("/v1/audio/voices")
+    upload_response = client.post(
+        "/v1/audio/voices",
+        content=b"not multipart",
+        headers={"content-type": "multipart/form-data; boundary=bad"},
+    )
+    replace_response = client.put(
+        "/v1/audio/voices/sample",
+        content=b"not multipart",
+        headers={"content-type": "multipart/form-data; boundary=bad"},
+    )
     valid_response = client.get("/v1/models", headers={"Authorization": "Bearer secret"})
     health_response = client.get("/health")
 
@@ -111,6 +121,8 @@ def test_openai_routes_require_bearer_token_when_configured() -> None:
     }
     assert invalid_response.status_code == 401
     assert voices_response.status_code == 401
+    assert upload_response.status_code == 401
+    assert replace_response.status_code == 401
     assert valid_response.status_code == 200
     assert health_response.status_code == 200
     assert health_response.json()["server"]["auth_enabled"] is True
@@ -222,6 +234,20 @@ def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(
     assert empty.status_code == 400
     assert empty.json()["error"]["message"] == "Voice file must not be empty."
     assert not (tmp_path.parent / "sample.wav").exists()
+
+
+def test_voice_list_ignores_wav_files_with_unmanaged_ids(tmp_path) -> None:
+    voices_dir = tmp_path / "voices"
+    voices_dir.mkdir()
+    (voices_dir / "sample.wav").write_bytes(b"wav")
+    (voices_dir / "speaker.v1.wav").write_bytes(b"wav")
+
+    response = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=voices_dir))
+    ).get("/v1/audio/voices")
+
+    assert response.status_code == 200
+    assert [voice["id"] for voice in response.json()["data"]] == ["sample"]
 
 
 def test_managed_voice_does_not_override_explicit_irodori_reference_options(tmp_path) -> None:

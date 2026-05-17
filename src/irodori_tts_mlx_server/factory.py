@@ -161,6 +161,10 @@ def _require_bearer_auth(config: ServerConfig, request: Request) -> None:
         )
 
 
+def _authentication_error_response(exc: HTTPException) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content=exc.detail)
+
+
 def _apply_managed_voice_reference(
     request: AudioSpeechRequest, voice_registry: VoiceRegistry
 ) -> dict[str, Any]:
@@ -194,6 +198,15 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
     )
     voice_registry = VoiceRegistry(server_config.voices_dir)
     app = FastAPI(title="Irodori-TTS-MLX Server", version="0.1.0")
+
+    @app.middleware("http")
+    async def authenticate_openai_routes(api_request: Request, call_next: Any) -> Response:
+        if api_request.url.path.startswith("/v1/"):
+            try:
+                _require_bearer_auth(server_config, api_request)
+            except HTTPException as exc:
+                return _authentication_error_response(exc)
+        return await call_next(api_request)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
