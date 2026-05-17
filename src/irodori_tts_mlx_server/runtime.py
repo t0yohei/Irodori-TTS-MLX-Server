@@ -23,6 +23,7 @@ DEFAULT_TAIL_SILENCE_TRIM_MS = 0
 DEFAULT_TAIL_SILENCE_KEEP_MS = 40
 DEFAULT_TAIL_SILENCE_THRESHOLD = 256
 WAV_MEDIA_TYPE = "audio/wav"
+LORA_ADAPTER_OPTION = "lora_adapter"
 
 
 @dataclass(frozen=True)
@@ -259,6 +260,28 @@ def _required_float_option(
     return value
 
 
+def _reject_unsupported_lora_adapter(options: dict[str, Any]) -> None:
+    adapter = _clean_option(options, LORA_ADAPTER_OPTION)
+    if adapter is None:
+        return
+    if not isinstance(adapter, str):
+        raise RuntimeRequestError("irodori.lora_adapter must be a string.")
+    adapter = adapter.strip()
+    if not adapter:
+        return
+    if _looks_like_local_path(adapter):
+        raise RuntimeRequestError(
+            "irodori.lora_adapter must be a configured adapter alias; arbitrary local paths are not accepted."
+        )
+    raise RuntimeRequestError(
+        "irodori.lora_adapter is not supported by the current Irodori-TTS-MLX runtime boundary."
+    )
+
+
+def _looks_like_local_path(value: str) -> bool:
+    return value.startswith((".", "~")) or "/" in value or "\\" in value or ":" in value
+
+
 def _num_steps_option(options: dict[str, Any]) -> int:
     preset = _string_option(options, "preset")
     if preset is not None and preset not in PRESET_NUM_STEPS:
@@ -369,7 +392,9 @@ def process_wav_tail(audio: bytes, options: TailArtifactOptions) -> bytes:
         frames = _trim_trailing_silence(
             frames,
             params=params,
-            minimum_silence_frames=_ms_to_frames(options.silence_trim_ms, framerate=params.framerate),
+            minimum_silence_frames=_ms_to_frames(
+                options.silence_trim_ms, framerate=params.framerate
+            ),
             keep_silence_frames=_ms_to_frames(options.silence_keep_ms, framerate=params.framerate),
             threshold=options.silence_threshold,
         )
@@ -386,7 +411,9 @@ def concatenate_wav_audio(parts: Sequence[bytes]) -> bytes:
     for part in parts[1:]:
         params, chunk_frames = _read_wav_frames(part)
         if params[:3] != first_params[:3] or params.framerate != first_params.framerate:
-            raise RuntimeUnavailableError("Generated WAV chunks have incompatible audio parameters.")
+            raise RuntimeUnavailableError(
+                "Generated WAV chunks have incompatible audio parameters."
+            )
         frames.append(chunk_frames)
     return _write_wav_frames(first_params, b"".join(frames))
 
@@ -397,7 +424,9 @@ def _read_wav_frames(audio: bytes) -> tuple[wave._wave_params, bytes]:
             params = wav_file.getparams()
             return params, wav_file.readframes(params.nframes)
     except (EOFError, wave.Error) as exc:
-        raise RuntimeUnavailableError(f"Irodori-TTS-MLX generated invalid WAV audio: {exc}") from exc
+        raise RuntimeUnavailableError(
+            f"Irodori-TTS-MLX generated invalid WAV audio: {exc}"
+        ) from exc
 
 
 def _write_wav_frames(params: wave._wave_params, frames: bytes) -> bytes:
@@ -478,6 +507,7 @@ class IrodoriMLXRuntimeManager:
         }
 
     def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
+        _reject_unsupported_lora_adapter(dict(request.irodori))
         runtime = self._get_runtime()
         options = dict(request.irodori)
         chunks = self._split_request_text(request, options)
@@ -498,7 +528,9 @@ class IrodoriMLXRuntimeManager:
             audio_chunks.append(
                 process_wav_tail(self._generate_single_chunk(runtime, chunk_request), tail_options)
             )
-        return SpeechGenerationResult(audio=concatenate_wav_audio(audio_chunks), media_type=WAV_MEDIA_TYPE)
+        return SpeechGenerationResult(
+            audio=concatenate_wav_audio(audio_chunks), media_type=WAV_MEDIA_TYPE
+        )
 
     def _generate_single_chunk(self, runtime: Any, request: SpeechGenerationRequest) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as output_file:
@@ -520,7 +552,9 @@ class IrodoriMLXRuntimeManager:
             except OSError:
                 pass
 
-    def _split_request_text(self, request: SpeechGenerationRequest, options: dict[str, Any]) -> list[str]:
+    def _split_request_text(
+        self, request: SpeechGenerationRequest, options: dict[str, Any]
+    ) -> list[str]:
         chunking = _bool_option(options, "chunking", default=True)
         if not chunking:
             return [request.input]
@@ -608,11 +642,16 @@ class IrodoriMLXRuntimeManager:
         runtime_module, _ = self._module_loader()
         options = dict(request.irodori)
         if request.response_format != "wav":
-            raise RuntimeRequestError("Only wav output can be passed to the Irodori-TTS-MLX runtime.")
+            raise RuntimeRequestError(
+                "Only wav output can be passed to the Irodori-TTS-MLX runtime."
+            )
+        _reject_unsupported_lora_adapter(options)
         reference_wav = _string_option(options, "reference_wav")
         no_reference = _bool_option(options, "no_reference", default=reference_wav is None)
         if reference_wav and no_reference:
-            raise RuntimeRequestError("irodori.reference_wav and irodori.no_reference=true cannot both be set.")
+            raise RuntimeRequestError(
+                "irodori.reference_wav and irodori.no_reference=true cannot both be set."
+            )
         if not reference_wav and not no_reference:
             raise RuntimeRequestError("irodori.no_reference=false requires irodori.reference_wav.")
         duration_scale = _float_option(options, "duration_scale", default=None)
@@ -634,7 +673,8 @@ class IrodoriMLXRuntimeManager:
             cfg_scale_text=_required_float_option(options, "cfg_scale_text", default=3.0),
             cfg_scale_caption=_required_float_option(options, "cfg_scale_caption", default=3.0),
             cfg_scale_speaker=_required_float_option(options, "cfg_scale_speaker", default=5.0),
-            cfg_guidance_mode=_string_option(options, "cfg_guidance_mode", default="independent") or "independent",
+            cfg_guidance_mode=_string_option(options, "cfg_guidance_mode", default="independent")
+            or "independent",
             cfg_min_t=cfg_min_t,
             cfg_max_t=cfg_max_t,
             seed=_int_option(options, "seed", default=0, minimum=0),

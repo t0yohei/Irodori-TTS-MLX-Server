@@ -211,6 +211,13 @@ Supported `irodori` runtime options include `reference_wav`, `no_reference`,
 When `duration_scale` is omitted, OpenAI `speed` maps to
 `duration_scale=1/speed`.
 
+`irodori.lora_adapter` is intentionally unsupported with the current
+Irodori-TTS-MLX runtime boundary. Blank values are ignored, but non-empty values
+return `invalid_irodori_options`; path-like values are rejected explicitly so
+requests cannot load arbitrary local adapter files. LoRA support should be added
+only after the MLX runtime exposes an adapter field plus clear alias/allowlist
+and cache/reload semantics.
+
 Long text chunking is enabled by default. The server splits text on Japanese and
 English punctuation before falling back to hard character slices, using
 `IRODORI_MLX_TEXT_MAX_LENGTH` as the default `chunk_max_chars`. Set
