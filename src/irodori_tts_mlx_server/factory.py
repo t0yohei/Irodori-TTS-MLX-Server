@@ -10,7 +10,7 @@ from typing import Any, AsyncIterator, Literal
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from irodori_tts_mlx_server.config import ServerConfig, server_config_from_env
@@ -66,6 +66,144 @@ class AudioSpeechRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
     irodori: dict[str, Any] = Field(default_factory=dict)
     stream: bool = False
+    stream_format: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_compatibility_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        irodori = normalized.get("irodori")
+        if irodori is None:
+            irodori_options: dict[str, Any] = {}
+        elif isinstance(irodori, dict):
+            irodori_options = dict(irodori)
+        else:
+            return normalized
+
+        for alias, canonical in TOP_LEVEL_IRODORI_ALIASES.items():
+            if alias not in normalized:
+                continue
+            _set_irodori_option(
+                irodori_options,
+                canonical,
+                normalized.pop(alias),
+                alias=alias,
+            )
+        if "context_kv_cache" in normalized:
+            _set_inverted_irodori_option(
+                irodori_options,
+                "no_context_kv_cache",
+                normalized.pop("context_kv_cache"),
+                alias="context_kv_cache",
+            )
+
+        _normalize_irodori_aliases(irodori_options)
+        normalized["irodori"] = irodori_options
+        return normalized
+
+
+TOP_LEVEL_IRODORI_ALIASES = {
+    "no_ref": "no_reference",
+    "seconds": "seconds",
+    "duration_scale": "duration_scale",
+    "num_steps": "num_steps",
+    "seed": "seed",
+    "cfg_scale_text": "cfg_scale_text",
+    "cfg_scale_caption": "cfg_scale_caption",
+    "cfg_scale_speaker": "cfg_scale_speaker",
+    "cfg_guidance_mode": "cfg_guidance_mode",
+    "cfg_min_t": "cfg_min_t",
+    "cfg_max_t": "cfg_max_t",
+    "max_ref_seconds": "max_reference_seconds",
+    "max_reference_seconds": "max_reference_seconds",
+    "no_context_kv_cache": "no_context_kv_cache",
+    "chunking": "chunking",
+    "chunking_enabled": "chunking",
+    "chunk_max_chars": "chunk_max_chars",
+}
+
+IRODORI_OPTION_ALIASES = {
+    "ref_wav": "reference_wav",
+    "no_ref": "no_reference",
+    "max_ref_seconds": "max_reference_seconds",
+    "chunking_enabled": "chunking",
+}
+
+UNSUPPORTED_IRODORI_OPTIONS = {
+    "ref_latent",
+    "lora_adapter",
+    "chunk_min_chars",
+    "min_seconds",
+    "max_seconds",
+    "ref_normalize_db",
+    "ref_ensure_max",
+    "t_schedule_mode",
+    "sway_coeff",
+    "num_candidates",
+    "decode_mode",
+    "cfg_scale",
+    "truncation_factor",
+    "rescale_k",
+    "rescale_sigma",
+    "speaker_kv_scale",
+    "speaker_kv_min_t",
+    "speaker_kv_max_layers",
+    "trim_tail",
+    "tail_window_size",
+    "tail_std_threshold",
+    "tail_mean_threshold",
+    "max_text_len",
+}
+
+
+def _set_irodori_option(options: dict[str, Any], canonical: str, value: Any, *, alias: str) -> None:
+    if canonical in options and options[canonical] != value:
+        raise ValueError(f"{alias} conflicts with irodori.{canonical}.")
+    options[canonical] = value
+
+
+def _set_inverted_irodori_option(
+    options: dict[str, Any], canonical: str, value: Any, *, alias: str
+) -> None:
+    if isinstance(value, bool):
+        inverted = not value
+    elif isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            inverted = False
+        elif normalized in {"0", "false", "no", "off"}:
+            inverted = True
+        else:
+            raise ValueError(f"irodori.{alias} must be a boolean.")
+    else:
+        raise ValueError(f"irodori.{alias} must be a boolean.")
+    _set_irodori_option(options, canonical, inverted, alias=f"irodori.{alias}")
+
+
+def _normalize_irodori_aliases(options: dict[str, Any]) -> None:
+    unsupported = sorted(UNSUPPORTED_IRODORI_OPTIONS.intersection(options))
+    if unsupported:
+        names = ", ".join(f"irodori.{name}" for name in unsupported)
+        raise ValueError(f"Unsupported upstream Irodori option(s): {names}.")
+
+    if "context_kv_cache" in options:
+        _set_inverted_irodori_option(
+            options,
+            "no_context_kv_cache",
+            options.pop("context_kv_cache"),
+            alias="context_kv_cache",
+        )
+    for alias, canonical in IRODORI_OPTION_ALIASES.items():
+        if alias not in options:
+            continue
+        _set_irodori_option(
+            options,
+            canonical,
+            options.pop(alias),
+            alias=f"irodori.{alias}",
+        )
 
 
 class VoiceUploadResponse(BaseModel):
@@ -110,8 +248,7 @@ VOICE_UPLOAD_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 def _is_voice_upload_route(request: Request) -> bool:
     return request.method in {"POST", "PUT"} and (
-        request.url.path == "/v1/audio/voices"
-        or request.url.path.startswith("/v1/audio/voices/")
+        request.url.path == "/v1/audio/voices" or request.url.path.startswith("/v1/audio/voices/")
     )
 
 
@@ -242,7 +379,7 @@ def _apply_managed_voice_reference(
     request: AudioSpeechRequest, voice_registry: VoiceRegistry
 ) -> dict[str, Any]:
     irodori_options = dict(request.irodori)
-    if "reference_wav" in irodori_options or "no_reference" in irodori_options:
+    if "reference_wav" in irodori_options or irodori_options.get("no_reference") is True:
         return irodori_options
 
     if not voice_registry.is_managed_voice_id(request.voice):
@@ -481,11 +618,16 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
         if server_configuration_error is not None:
             raise _server_configuration_error(server_configuration_error.message)
         _require_bearer_auth(server_config, api_request)
-        if request.stream or "text/event-stream" in api_request.headers.get("accept", ""):
+        if (
+            request.stream
+            or request.stream_format is not None
+            or "text/event-stream" in api_request.headers.get("accept", "")
+        ):
+            param = "stream_format" if request.stream_format is not None else "stream"
             raise openai_error(
                 "Streaming audio responses and SSE are not supported; request complete audio bytes.",
                 status_code=400,
-                param="stream",
+                param=param,
                 code="unsupported_streaming",
             )
         if request.model not in speech_runtime.list_models():
