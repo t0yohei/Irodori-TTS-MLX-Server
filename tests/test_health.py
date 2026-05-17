@@ -12,6 +12,7 @@ def test_health_returns_ok() -> None:
         "runtime": "unconfigured",
         "configured": False,
         "loaded": False,
+        "load_state": "unconfigured",
         "model_id": "irodori-tts-mlx",
     }
     server = response.json()["server"]

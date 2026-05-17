@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Literal
 
@@ -27,6 +29,8 @@ from irodori_tts_mlx_server.runtime import (
     create_default_runtime,
 )
 from irodori_tts_mlx_server.voices import VoiceRegistry
+
+logger = logging.getLogger("irodori_tts_mlx_server.server")
 
 
 class ServerConfigurationError(Exception):
@@ -253,9 +257,12 @@ class VoiceUploadResponse(BaseModel):
 
 
 class SynthesisLimiter:
-    def __init__(self, *, max_concurrent: int, queue_timeout_seconds: float) -> None:
+    def __init__(
+        self, *, max_concurrent: int, queue_timeout_seconds: float, log: logging.Logger = logger
+    ) -> None:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._queue_timeout_seconds = queue_timeout_seconds
+        self._logger = log
 
     @asynccontextmanager
     async def slot(self) -> AsyncIterator[None]:
@@ -269,6 +276,10 @@ class SynthesisLimiter:
                     self._semaphore.acquire(), timeout=self._queue_timeout_seconds
                 )
         except TimeoutError as exc:
+            self._logger.warning(
+                "synthesis_queue_timeout queue_timeout_seconds=%s",
+                self._queue_timeout_seconds,
+            )
             raise openai_error(
                 "Synthesis queue is full or the model is still loading; retry later.",
                 status_code=503,
@@ -493,13 +504,27 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
 
     @app.middleware("http")
     async def authenticate_openai_routes(api_request: Request, call_next: Any) -> Response:
+        started_at = time.monotonic()
+        status_code = 500
+        logger.info("request_start method=%s path=%s", api_request.method, api_request.url.path)
         try:
             if api_request.url.path.startswith("/v1/"):
                 _require_bearer_auth(server_config, api_request)
                 _install_voice_upload_size_guard(server_config, api_request)
-            return await call_next(api_request)
+            response = await call_next(api_request)
+            status_code = response.status_code
         except HTTPException as exc:
-            return _authentication_error_response(exc)
+            response = _authentication_error_response(exc)
+            status_code = response.status_code
+        finally:
+            logger.info(
+                "request_end method=%s path=%s status_code=%s duration_ms=%.1f",
+                api_request.method,
+                api_request.url.path,
+                status_code,
+                (time.monotonic() - started_at) * 1000,
+            )
+        return response
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
@@ -738,6 +763,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             async with synthesis_limiter.slot():
                 result = await run_in_threadpool(speech_runtime.generate_speech, generation_request)
         except RuntimeRequestError as exc:
+            logger.warning("generation_failed code=invalid_irodori_options error=%s", exc)
             raise openai_error(
                 str(exc),
                 status_code=400,
@@ -745,6 +771,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                 code="invalid_irodori_options",
             ) from exc
         except RuntimeUnavailableError as exc:
+            logger.error("generation_failed code=runtime_unavailable error=%s", exc)
             raise openai_error(
                 str(exc),
                 status_code=503,
@@ -757,6 +784,12 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             )
         except AudioConversionError as exc:
             status_code = 400 if exc.code == "unsupported_response_format" else 503
+            logger.warning(
+                "generation_failed code=%s response_format=%s error=%s",
+                exc.code,
+                request.response_format,
+                exc,
+            )
             raise openai_error(
                 str(exc),
                 status_code=status_code,

@@ -19,6 +19,11 @@ VOICE_FILE_SUFFIX = ".wav"
 VOICE_FILE_SUFFIXES = (".wav", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".aac", ".webm")
 LATENT_FILE_SUFFIXES = (".pt", ".pth")
 STALE_CREATE_LOCK_SECONDS = 300
+HARD_LINK_UNSUPPORTED_ERRNOS = {errno.EPERM, errno.EXDEV} | {
+    code
+    for code in (getattr(errno, "ENOTSUP", None), getattr(errno, "EOPNOTSUPP", None))
+    if code is not None
+}
 
 
 @dataclass(frozen=True)
@@ -132,11 +137,17 @@ class VoiceRegistry:
         return root
 
     def _create_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
+        temp_path: Path | None = None
         try:
-            descriptor = os.open(path, flags, 0o644)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                temp_file.write(data)
+            os.link(temp_path, path)
         except FileExistsError as exc:
             raise FileExistsError(
                 f"Voice {voice_id!r} already exists. Use PUT to replace it."
@@ -144,13 +155,46 @@ class VoiceRegistry:
         except OSError as exc:
             if exc.errno == errno.ELOOP:
                 raise ValueError("Managed reference voice files must not be symbolic links.") from exc
+            if exc.errno in HARD_LINK_UNSUPPORTED_ERRNOS:
+                self._create_file_without_hard_link(path, data, voice_id=voice_id)
+                return
             raise
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+
+    def _create_file_without_hard_link(self, path: Path, data: bytes, *, voice_id: str) -> None:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd: int | None = None
+        created = False
+        write_failed = False
         try:
-            with os.fdopen(descriptor, "wb") as voice_file:
-                voice_file.write(data)
-        except OSError:
-            path.unlink(missing_ok=True)
+            fd = os.open(path, flags, 0o600)
+            created = True
+            with os.fdopen(fd, "wb") as output_file:
+                fd = None
+                output_file.write(data)
+        except FileExistsError as exc:
+            raise FileExistsError(
+                f"Voice {voice_id!r} already exists. Use PUT to replace it."
+            ) from exc
+        except OSError as exc:
+            write_failed = True
+            if exc.errno == errno.ELOOP:
+                raise ValueError("Managed reference voice files must not be symbolic links.") from exc
             raise
+        finally:
+            if fd is not None:
+                os.close(fd)
+            if created:
+                try:
+                    if write_failed or path.stat().st_size != len(data):
+                        path.unlink(missing_ok=True)
+                except OSError:
+                    path.unlink(missing_ok=True)
+                    raise
 
     def _create_unique_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
         lock_path = path.parent / f".{voice_id}.create.lock"

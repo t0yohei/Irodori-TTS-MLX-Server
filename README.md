@@ -87,7 +87,7 @@ curl http://127.0.0.1:8000/health
 Expected response:
 
 ```json
-{"status":"ok","speech_runtime":{"runtime":"unconfigured","configured":false,"loaded":false,"model_id":"irodori-tts-mlx"},"server":{"auth_enabled":false,"max_concurrent_synthesis":1,"queue_timeout_seconds":30.0}}
+{"status":"ok","speech_runtime":{"runtime":"unconfigured","configured":false,"loaded":false,"load_state":"unconfigured","model_id":"irodori-tts-mlx"},"server":{"auth_enabled":false,"max_concurrent_synthesis":1,"queue_timeout_seconds":30.0}}
 ```
 
 See [docs/real_model_setup.md](docs/real_model_setup.md) for the full fresh
@@ -122,7 +122,9 @@ The same settings can be supplied through environment variables:
 `IRODORI_MLX_WEIGHTS_REPO`, `IRODORI_MLX_WEIGHTS_DIR`,
 `IRODORI_MLX_WEIGHTS_PATH`, and `IRODORI_MLX_MODEL_CONFIG_JSON`.
 `IRODORI_MLX_PRELOAD=1` loads the model during startup; otherwise loading is
-lazy on the first speech request.
+lazy on the first speech request. `/health` reports `speech_runtime.load_state`
+as `unconfigured`, `not_loaded`, `loading`, `loaded`, or `failed` without
+forcing model load.
 
 Local development does not require authentication by default. Set
 `IRODORI_SERVER_BEARER_TOKEN` to require `Authorization: Bearer <token>` on the
@@ -153,7 +155,8 @@ existing, non-symlink managed file inside `IRODORI_SERVER_VOICES_DIR`; remote
 URLs, path traversal, and arbitrary local paths are rejected. This route does
 not resolve alias files or latent references.
 Uploads are capped by `IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES`, which defaults
-to 50 MiB.
+to 50 MiB. New managed voice files are committed atomically so interrupted
+uploads do not leave partial `<voice_id>.wav` files behind.
 
 Security note: the management API does not resolve arbitrary client-supplied file paths.
 

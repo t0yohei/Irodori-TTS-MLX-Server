@@ -35,7 +35,7 @@ Status values:
 | Runtime / model backend | Uses the PyTorch Irodori-TTS 500M v3 base model from Hugging Face or a local safetensors checkpoint, with CUDA-oriented deployment. | Uses the external `irodori_mlx.runtime` adapter with hosted or local converted MLX weights: `IRODORI_MLX_WEIGHTS_REPO`, `IRODORI_MLX_WEIGHTS_DIR`, or `IRODORI_MLX_WEIGHTS_PATH` plus `IRODORI_MLX_MODEL_CONFIG_JSON`. | Partial | The backend is intentionally different. Fresh checkout setup and converted-weight layout are documented, but real-weight smoke testing is opt-in and may take several minutes. |
 | CUDA / PyTorch checkpoint serving | Provides the upstream CUDA/PyTorch server path for `Aratako/Irodori-TTS-500M-v3`. | Does not serve PyTorch safetensors checkpoints or CUDA runtimes. | Intentionally out of scope | This repository exists to expose Irodori-TTS-MLX on Apple Silicon. Use the upstream server for the PyTorch/CUDA stack. |
 | Dynamic LoRA adapters | Supports per-request `irodori.lora_adapter` with runtime caching, except when model compilation is enabled. | Not implemented. Requests with a non-empty `irodori.lora_adapter` return `invalid_irodori_options`; path-like values are rejected explicitly. | Unsupported | The current Irodori-TTS-MLX `GenerationRequest` and `MLXDACVAERuntime` boundary does not expose dynamic LoRA loading or adapter cache/reload semantics. This server therefore does not add PyTorch/CUDA assumptions or arbitrary local path loading. |
-| Health endpoint | Reports model, runtime, voices, defaults, and queue configuration without loading the model. | Reports runtime configuration/load state and server auth/concurrency settings without forcing model load. | Partial | Voice-registry and PyTorch-specific fields do not exist in this server. |
+| Health endpoint | Reports model, runtime, voices, defaults, and queue configuration without loading the model. | Reports runtime configuration and explicit `load_state` values (`unconfigured`, `not_loaded`, `loading`, `loaded`, `failed`) plus server auth/concurrency settings without forcing model load. | Partial | Voice-registry and PyTorch-specific fields do not exist in this server. |
 | Error shape | Uses OpenAI-style JSON errors for validation, auth, runtime, and queue failures. | Uses OpenAI-style JSON errors for validation, auth, runtime, encoder, and queue failures. | Implemented | Error codes differ where backend-specific failures differ. |
 
 ## Managed reference voice scope
@@ -58,6 +58,8 @@ Storage and security assumptions:
 - Uploaded files are written as `<voice_id><extension>` inside the managed
   directory. Supported extensions are `.wav`, `.flac`, `.mp3`, `.m4a`,
   `.ogg`, `.opus`, `.aac`, and `.webm`.
+- New uploads and replacements are committed atomically so interrupted writes do
+  not expose partial managed voice files.
 - A speech request using a managed `voice` id only injects the managed file path
   when the request did not already provide explicit `irodori.reference_wav` or
   a no-reference option other than false. Upstream-style `no_ref=false` keeps
