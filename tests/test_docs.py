@@ -65,3 +65,29 @@ def test_openai_client_examples_python_snippets_parse() -> None:
     assert snippets
     for snippet in snippets:
         ast.parse(snippet)
+
+
+def test_upstream_compatibility_matrix_covers_required_gap_areas() -> None:
+    doc = (ROOT / "docs" / "upstream_compatibility.md").read_text()
+    readme = (ROOT / "README.md").read_text()
+
+    assert "docs/upstream_compatibility.md" in readme
+    for required in (
+        "OpenAI-compatible model list",
+        "Speech request base fields",
+        "Response formats",
+        "Reference voice support",
+        "VoiceDesign caption / no-reference support",
+        "Long-text chunking",
+        "Queue / concurrency controls",
+        "Bearer-token auth",
+        "Docker / deployment support",
+        "Voice management endpoints",
+        "Runtime / model backend",
+        "Implemented",
+        "Partial",
+        "Unsupported",
+        "Intentionally out of scope",
+        "t0yohei/Irodori-TTS-MLX-500M-v2-VoiceDesign",
+    ):
+        assert required in doc
