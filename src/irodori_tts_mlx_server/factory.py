@@ -7,7 +7,7 @@ import secrets
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,6 +26,7 @@ from irodori_tts_mlx_server.runtime import (
     SpeechRuntime,
     create_default_runtime,
 )
+from irodori_tts_mlx_server.voices import VoiceRegistry
 
 
 class ServerConfigurationError(Exception):
@@ -67,6 +68,14 @@ class AudioSpeechRequest(BaseModel):
     stream: bool = False
 
 
+class VoiceUploadResponse(BaseModel):
+    id: str
+    object: Literal["voice_file"]
+    filename: str
+    bytes: int
+    created_at: int
+
+
 class SynthesisLimiter:
     def __init__(self, *, max_concurrent: int, queue_timeout_seconds: float) -> None:
         self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -96,6 +105,79 @@ class SynthesisLimiter:
             self._semaphore.release()
 
 
+VOICE_UPLOAD_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+def _is_voice_upload_route(request: Request) -> bool:
+    return request.method in {"POST", "PUT"} and (
+        request.url.path == "/v1/audio/voices"
+        or request.url.path.startswith("/v1/audio/voices/")
+    )
+
+
+def _voice_file_too_large_error(max_bytes: int) -> HTTPException:
+    return openai_error(
+        f"Voice file must be no larger than {max_bytes} bytes.",
+        status_code=413,
+        param="file",
+        code="voice_file_too_large",
+    )
+
+
+def _voice_storage_error(exc: OSError) -> HTTPException:
+    return openai_error(
+        f"Managed reference voice storage is unavailable: {exc}",
+        status_code=503,
+        error_type="server_error",
+        param="voice_id",
+        code="voice_storage_unavailable",
+    )
+
+
+def _install_voice_upload_size_guard(config: ServerConfig, request: Request) -> None:
+    if not _is_voice_upload_route(request):
+        return
+    max_request_bytes = config.max_voice_upload_bytes + VOICE_UPLOAD_MULTIPART_OVERHEAD_BYTES
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            request_bytes = int(content_length)
+        except ValueError as exc:
+            raise openai_error(
+                "Invalid Content-Length header.",
+                status_code=400,
+                param="content-length",
+                code="invalid_content_length",
+            ) from exc
+        if request_bytes > max_request_bytes:
+            raise _voice_file_too_large_error(config.max_voice_upload_bytes)
+
+    receive = request._receive
+    received_bytes = 0
+
+    async def limited_receive() -> Any:
+        nonlocal received_bytes
+        message = await receive()
+        if message.get("type") == "http.request":
+            body = message.get("body", b"")
+            if isinstance(body, bytes):
+                received_bytes += len(body)
+                if received_bytes > max_request_bytes:
+                    raise _voice_file_too_large_error(config.max_voice_upload_bytes)
+        return message
+
+    request._receive = limited_receive
+
+
+async def _read_voice_upload(file: UploadFile, *, max_bytes: int) -> bytes:
+    data = bytearray()
+    while chunk := await file.read(1024 * 1024):
+        data.extend(chunk)
+        if len(data) > max_bytes:
+            raise _voice_file_too_large_error(max_bytes)
+    return bytes(data)
+
+
 def _server_configuration_error(message: str) -> HTTPException:
     return openai_error(
         message,
@@ -115,12 +197,15 @@ def _resolve_server_config(config: ServerConfig | None) -> ServerConfig:
 
 
 def _server_health_metadata(
-    config: ServerConfig, configuration_error: ServerConfigurationError | None
+    config: ServerConfig,
+    configuration_error: ServerConfigurationError | None,
+    voice_registry: VoiceRegistry,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "auth_enabled": config.auth_enabled,
         "max_concurrent_synthesis": config.max_concurrent_synthesis,
         "queue_timeout_seconds": config.queue_timeout_seconds,
+        "voices": voice_registry.status_metadata(),
     }
     if configuration_error is not None:
         metadata.update(
@@ -149,6 +234,34 @@ def _require_bearer_auth(config: ServerConfig, request: Request) -> None:
         )
 
 
+def _authentication_error_response(exc: HTTPException) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content=exc.detail)
+
+
+def _apply_managed_voice_reference(
+    request: AudioSpeechRequest, voice_registry: VoiceRegistry
+) -> dict[str, Any]:
+    irodori_options = dict(request.irodori)
+    if "reference_wav" in irodori_options or "no_reference" in irodori_options:
+        return irodori_options
+
+    if not voice_registry.is_managed_voice_id(request.voice):
+        return irodori_options
+
+    try:
+        voice_file = voice_registry.get_file(request.voice)
+    except ValueError:
+        return irodori_options
+    except OSError:
+        return irodori_options
+    if voice_file is None:
+        return irodori_options
+
+    irodori_options["reference_wav"] = str(voice_file.path)
+    irodori_options["no_reference"] = False
+    return irodori_options
+
+
 def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None = None) -> FastAPI:
     speech_runtime = runtime if runtime is not None else create_default_runtime()
     server_configuration_error: ServerConfigurationError | None = None
@@ -161,7 +274,18 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
         max_concurrent=server_config.max_concurrent_synthesis,
         queue_timeout_seconds=server_config.queue_timeout_seconds,
     )
+    voice_registry = VoiceRegistry(server_config.voices_dir)
     app = FastAPI(title="Irodori-TTS-MLX Server", version="0.1.0")
+
+    @app.middleware("http")
+    async def authenticate_openai_routes(api_request: Request, call_next: Any) -> Response:
+        try:
+            if api_request.url.path.startswith("/v1/"):
+                _require_bearer_auth(server_config, api_request)
+                _install_voice_upload_size_guard(server_config, api_request)
+            return await call_next(api_request)
+        except HTTPException as exc:
+            return _authentication_error_response(exc)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
@@ -204,7 +328,9 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
         return {
             "status": "ok",
             "speech_runtime": speech_runtime.status_metadata(),
-            "server": _server_health_metadata(server_config, server_configuration_error),
+            "server": _server_health_metadata(
+                server_config, server_configuration_error, voice_registry
+            ),
         }
 
     @app.get("/v1/models", tags=["openai"])
@@ -224,6 +350,131 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                 for model_id in speech_runtime.list_models()
             ],
         }
+
+    @app.get("/v1/audio/voices", tags=["openai"])
+    async def list_voices(api_request: Request) -> dict[str, Any]:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
+        _require_bearer_auth(server_config, api_request)
+        try:
+            voice_files = voice_registry.list_files()
+        except OSError as exc:
+            raise _voice_storage_error(exc)
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": voice_file.voice_id,
+                    "object": "voice",
+                    "ref_wav": str(voice_file.path),
+                    "ref_latent": None,
+                    "no_ref": False,
+                }
+                for voice_file in voice_files
+            ],
+        }
+
+    @app.post("/v1/audio/voices", status_code=201, tags=["openai"])
+    async def upload_voice(
+        api_request: Request,
+        file: UploadFile = File(...),
+        voice_id: str | None = Form(default=None),
+    ) -> VoiceUploadResponse:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
+        _require_bearer_auth(server_config, api_request)
+        filename = file.filename or ""
+        resolved_voice_id = (voice_id or filename.rsplit(".", 1)[0]).strip()
+        data = await _read_voice_upload(file, max_bytes=server_config.max_voice_upload_bytes)
+        try:
+            voice_file = voice_registry.write_file(
+                voice_id=resolved_voice_id,
+                filename=filename,
+                data=data,
+                replace=False,
+            )
+        except FileExistsError as exc:
+            raise openai_error(str(exc), status_code=409, param="voice_id", code="voice_exists")
+        except ValueError as exc:
+            raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
+        except OSError as exc:
+            raise _voice_storage_error(exc)
+        return VoiceUploadResponse(**voice_file.metadata())
+
+    @app.get("/v1/audio/voices/{voice_id}", tags=["openai"])
+    async def get_voice(api_request: Request, voice_id: str) -> VoiceUploadResponse:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
+        _require_bearer_auth(server_config, api_request)
+        try:
+            voice_file = voice_registry.get_file(voice_id)
+        except ValueError as exc:
+            raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
+        except OSError as exc:
+            raise _voice_storage_error(exc)
+        if voice_file is None:
+            raise openai_error(
+                f"Voice {voice_id!r} was not found.",
+                status_code=404,
+                param="voice_id",
+                code="voice_not_found",
+            )
+        return VoiceUploadResponse(**voice_file.metadata())
+
+    @app.put("/v1/audio/voices/{voice_id}", tags=["openai"])
+    async def replace_voice(
+        api_request: Request,
+        voice_id: str,
+        file: UploadFile = File(...),
+    ) -> VoiceUploadResponse:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
+        _require_bearer_auth(server_config, api_request)
+        try:
+            if voice_registry.get_file(voice_id) is None:
+                raise openai_error(
+                    f"Voice {voice_id!r} was not found.",
+                    status_code=404,
+                    param="voice_id",
+                    code="voice_not_found",
+                )
+        except ValueError as exc:
+            raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
+        except OSError as exc:
+            raise _voice_storage_error(exc)
+
+        try:
+            voice_file = voice_registry.write_file(
+                voice_id=voice_id,
+                filename=file.filename or "",
+                data=await _read_voice_upload(file, max_bytes=server_config.max_voice_upload_bytes),
+                replace=True,
+            )
+        except ValueError as exc:
+            raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
+        except OSError as exc:
+            raise _voice_storage_error(exc)
+        return VoiceUploadResponse(**voice_file.metadata())
+
+    @app.delete("/v1/audio/voices/{voice_id}", tags=["openai"])
+    async def delete_voice(api_request: Request, voice_id: str) -> dict[str, Any]:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
+        _require_bearer_auth(server_config, api_request)
+        try:
+            deleted = voice_registry.delete_file(voice_id)
+        except ValueError as exc:
+            raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
+        except OSError as exc:
+            raise _voice_storage_error(exc)
+        if not deleted:
+            raise openai_error(
+                f"Voice {voice_id!r} was not found.",
+                status_code=404,
+                param="voice_id",
+                code="voice_not_found",
+            )
+        return {"id": voice_id, "object": "voice_file", "deleted": True}
 
     @app.post("/v1/audio/speech", tags=["openai"])
     async def create_speech(api_request: Request, request: AudioSpeechRequest) -> Response:
@@ -255,13 +506,14 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                 param="response_format",
                 code=exc.code,
             ) from exc
+        irodori_options = _apply_managed_voice_reference(request, voice_registry)
         generation_request = SpeechGenerationRequest(
             model=request.model,
             input=request.input,
             voice=request.voice,
             response_format="wav",
             speed=request.speed,
-            irodori=request.irodori,
+            irodori=irodori_options,
         )
         try:
             async with synthesis_limiter.slot():

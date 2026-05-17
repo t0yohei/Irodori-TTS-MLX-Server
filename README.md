@@ -13,6 +13,8 @@ This scaffold includes the package bootstrap, local development workflow,
 
 - `GET /v1/models`
 - `POST /v1/audio/speech`
+- `GET`, `POST`, `GET by id`, `PUT`, and `DELETE` for
+  `/v1/audio/voices`
 
 The default runtime is import-safe without model weights. It lists the MVP model
 id but returns a clear `runtime_unavailable` error for speech generation until a
@@ -36,19 +38,19 @@ keeping the backend boundary narrow enough to run on Apple Silicon with
 converted MLX weights.
 
 Choose the upstream server when you want the PyTorch v3 base model, CUDA-oriented
-deployment, Docker Compose setup, built-in voice-file APIs, automatic long-text
-chunking, queue controls, optional auth, or multiple encoded response formats.
+deployment, Docker Compose setup, broad voice-file and alias APIs, automatic
+long-text chunking, queue controls, optional auth, or multiple encoded response formats.
 Choose this server when you specifically want to exercise Irodori-TTS-MLX on
 Apple Silicon and can provide converted MLX weights plus the matching model
 configuration.
 
 The current MLX server MVP does not claim parity with the upstream server. The
 initial surface supports the OpenAI-compatible model list and speech endpoint,
-VoiceDesign v2 no-reference/caption options, `wav` output, and clear
-configuration errors before weights are available. Runtime smoke evidence,
-compressed audio formats, voice management endpoints, long-text chunking,
-queueing, bearer-token auth, and full upstream option coverage are tracked as
-follow-up work unless explicitly documented as implemented here.
+VoiceDesign v2 no-reference/caption options, managed WAV reference uploads,
+`wav` output, and clear configuration errors before weights are available.
+Runtime smoke evidence, compressed audio formats, long-text chunking, queueing,
+bearer-token auth, and full upstream option coverage are tracked as follow-up
+work unless explicitly documented as implemented here.
 
 See [docs/upstream_compatibility.md](docs/upstream_compatibility.md) for the
 concrete upstream compatibility gap matrix.
@@ -132,6 +134,47 @@ not run concurrently unless configured. Defaults are conservative:
 `IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS=1` and
 `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS=30`. Requests that cannot acquire a slot
 before the timeout return a 503 OpenAI-style `synthesis_queue_timeout` error.
+
+Reference voice files can be managed through a small upstream-style subset under
+`/v1/audio/voices`. Set `IRODORI_SERVER_VOICES_DIR` to choose the storage
+directory; it defaults to `voices` relative to the server process. Managed
+reference voices are WAV-only. Voice IDs may contain ASCII letters, numbers,
+underscores, or hyphens. Uploaded files are always stored as
+`<voice_id>.wav` inside that directory, and speech requests that set
+`voice` to a managed ID automatically receive `irodori.reference_wav` and
+`irodori.no_reference=false` unless the request already supplies explicit
+reference or no-reference options. This route does not resolve arbitrary
+client-supplied file paths, alias files, latent references, or remote URLs.
+Uploads are capped by `IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES`, which defaults
+to 50 MiB.
+
+Security note: the management API does not resolve arbitrary client-supplied file paths.
+
+List and upload managed voices:
+
+```bash
+curl http://127.0.0.1:8000/v1/audio/voices \
+  -H 'Authorization: Bearer <token>'
+
+curl http://127.0.0.1:8000/v1/audio/voices \
+  -H 'Authorization: Bearer <token>' \
+  -F voice_id=sample \
+  -F file=@sample.wav
+```
+
+Additional managed voice routes are `GET /v1/audio/voices/{voice_id}`,
+`PUT /v1/audio/voices/{voice_id}`, and
+`DELETE /v1/audio/voices/{voice_id}`. Use the upstream PyTorch server when you
+need alias-file resolution, latent reference files, or non-WAV voice upload
+formats.
+
+Managed voice endpoint summary:
+
+- `GET /v1/audio/voices`
+- `POST /v1/audio/voices`
+- `GET /v1/audio/voices/{voice_id}`
+- `PUT /v1/audio/voices/{voice_id}`
+- `DELETE /v1/audio/voices/{voice_id}`
 
 List OpenAI-compatible models:
 

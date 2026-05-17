@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import io
 import threading
@@ -5,15 +6,20 @@ import time
 import wave
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
+import irodori_tts_mlx_server.voices as voice_module
 from irodori_tts_mlx_server import create_app
 from irodori_tts_mlx_server.config import ServerConfig, server_config_from_env
+from irodori_tts_mlx_server.factory import _install_voice_upload_size_guard
 from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     SpeechGenerationRequest,
     SpeechGenerationResult,
 )
+from irodori_tts_mlx_server.voices import VoiceRegistry
 
 
 def wav_bytes(pcm: bytes = bytes([1, 2, 3, 4])) -> bytes:
@@ -98,6 +104,17 @@ def test_openai_routes_require_bearer_token_when_configured() -> None:
             "response_format": "wav",
         },
     )
+    voices_response = client.get("/v1/audio/voices")
+    upload_response = client.post(
+        "/v1/audio/voices",
+        content=b"not multipart",
+        headers={"content-type": "multipart/form-data; boundary=bad"},
+    )
+    replace_response = client.put(
+        "/v1/audio/voices/sample",
+        content=b"not multipart",
+        headers={"content-type": "multipart/form-data; boundary=bad"},
+    )
     valid_response = client.get("/v1/models", headers={"Authorization": "Bearer secret"})
     health_response = client.get("/health")
 
@@ -109,6 +126,9 @@ def test_openai_routes_require_bearer_token_when_configured() -> None:
         "code": "invalid_api_key",
     }
     assert invalid_response.status_code == 401
+    assert voices_response.status_code == 401
+    assert upload_response.status_code == 401
+    assert replace_response.status_code == 401
     assert valid_response.status_code == 200
     assert health_response.status_code == 200
     assert health_response.json()["server"]["auth_enabled"] is True
@@ -118,6 +138,493 @@ def test_openai_routes_allow_local_development_without_auth() -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).get("/v1/models")
 
     assert response.status_code == 200
+
+
+def test_voice_upload_list_get_replace_delete_and_speech_resolution(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(
+        create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path / "voices"))
+    )
+
+    created = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"old wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+    listed = client.get("/v1/audio/voices")
+    fetched = client.get("/v1/audio/voices/sample")
+    speech = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+        },
+    )
+    replaced = client.put(
+        "/v1/audio/voices/sample",
+        files={"file": ("renamed.wav", b"new wav", "audio/wav")},
+    )
+    deleted = client.delete("/v1/audio/voices/sample")
+    missing = client.get("/v1/audio/voices/sample")
+
+    assert created.status_code == 201
+    assert created.json()["filename"] == "sample.wav"
+    assert listed.status_code == 200
+    assert listed.json()["data"] == [
+        {
+            "id": "sample",
+            "object": "voice",
+            "ref_wav": str(tmp_path / "voices" / "sample.wav"),
+            "ref_latent": None,
+            "no_ref": False,
+        }
+    ]
+    assert fetched.status_code == 200
+    assert speech.status_code == 200
+    assert runtime.requests[-1].irodori == {
+        "reference_wav": str(tmp_path / "voices" / "sample.wav"),
+        "no_reference": False,
+    }
+    assert replaced.status_code == 200
+    assert replaced.json()["bytes"] == len(b"new wav")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"id": "sample", "object": "voice_file", "deleted": True}
+    assert missing.status_code == 404
+
+
+def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(tmp_path) -> None:
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    duplicate = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+    bad_id = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "../sample"},
+    )
+    bad_extension = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.mp3", b"mp3", "audio/mpeg")},
+        data={"voice_id": "mp3"},
+    )
+    empty = client.post(
+        "/v1/audio/voices",
+        files={"file": ("empty.wav", b"", "audio/wav")},
+        data={"voice_id": "empty"},
+    )
+
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "voice_exists"
+    assert bad_id.status_code == 400
+    assert bad_id.json()["error"]["code"] == "invalid_voice"
+    assert bad_extension.status_code == 400
+    assert bad_extension.json()["error"]["message"] == (
+        "Managed reference voices must be uploaded as .wav files."
+    )
+    assert empty.status_code == 400
+    assert empty.json()["error"]["message"] == "Voice file must not be empty."
+    assert not (tmp_path.parent / "sample.wav").exists()
+
+
+def test_voice_upload_reports_storage_errors(monkeypatch, tmp_path) -> None:
+    def fail_write_file(*args, **kwargs):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(VoiceRegistry, "write_file", fail_write_file)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "server_error"
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
+def test_voice_create_removes_partial_file_after_write_failure(monkeypatch, tmp_path) -> None:
+    class FailingVoiceFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def write(self, data):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(voice_module.os, "fdopen", lambda *args, **kwargs: FailingVoiceFile())
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+    assert not (tmp_path / "sample.wav").exists()
+
+
+def test_voice_delete_reports_storage_errors(monkeypatch, tmp_path) -> None:
+    def fail_delete_file(*args, **kwargs):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(VoiceRegistry, "delete_file", fail_delete_file)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.delete("/v1/audio/voices/sample")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "server_error"
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
+def test_voice_replace_reports_storage_race_as_storage_error(monkeypatch, tmp_path) -> None:
+    (tmp_path / "sample.wav").write_bytes(b"old wav")
+
+    def fail_write_file(*args, **kwargs):
+        raise FileNotFoundError("voices directory disappeared")
+
+    monkeypatch.setattr(VoiceRegistry, "write_file", fail_write_file)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.put(
+        "/v1/audio/voices/sample",
+        files={"file": ("sample.wav", b"new wav", "audio/wav")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "server_error"
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
+def test_voice_upload_reports_file_storage_root_as_storage_error(tmp_path) -> None:
+    voices_root = tmp_path / "voices"
+    voices_root.write_text("not a directory")
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=voices_root))
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
+def test_voice_read_routes_report_file_storage_root_as_storage_error_without_breaking_speech(
+    tmp_path,
+) -> None:
+    voices_root = tmp_path / "voices"
+    voices_root.write_text("not a directory")
+    runtime = MockSpeechRuntime()
+    client = TestClient(
+        create_app(runtime=runtime, config=ServerConfig(voices_dir=voices_root))
+    )
+
+    listed = client.get("/v1/audio/voices")
+    fetched = client.get("/v1/audio/voices/sample")
+    speech = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+        },
+    )
+    health = client.get("/health")
+
+    assert listed.status_code == 503
+    assert listed.json()["error"]["code"] == "voice_storage_unavailable"
+    assert fetched.status_code == 503
+    assert fetched.json()["error"]["code"] == "voice_storage_unavailable"
+    assert speech.status_code == 200
+    assert runtime.requests[-1].irodori == {}
+    assert health.status_code == 200
+    assert "not a directory" in health.json()["server"]["voices"]["files_error"]
+
+
+def test_voice_list_reports_storage_errors_without_breaking_health(monkeypatch, tmp_path) -> None:
+    def fail_list_files(*args, **kwargs):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(VoiceRegistry, "list_files", fail_list_files)
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    health = client.get("/health")
+    response = client.get("/v1/audio/voices")
+
+    assert health.status_code == 200
+    assert health.json()["server"]["voices"]["files"] == 0
+    assert "permission denied" in health.json()["server"]["voices"]["files_error"]
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
+def test_voice_upload_and_replace_reject_files_above_configured_limit(tmp_path) -> None:
+    client = TestClient(
+        create_app(
+            runtime=MockSpeechRuntime(),
+            config=ServerConfig(voices_dir=tmp_path, max_voice_upload_bytes=3),
+        )
+    )
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    too_large = client.post(
+        "/v1/audio/voices",
+        files={"file": ("large.wav", b"1234", "audio/wav")},
+        data={"voice_id": "large"},
+    )
+    replace_too_large = client.put(
+        "/v1/audio/voices/sample",
+        files={"file": ("sample.wav", b"1234", "audio/wav")},
+    )
+
+    assert too_large.status_code == 413
+    assert too_large.json()["error"]["code"] == "voice_file_too_large"
+    assert replace_too_large.status_code == 413
+    assert replace_too_large.json()["error"]["code"] == "voice_file_too_large"
+    assert (tmp_path / "sample.wav").read_bytes() == b"wav"
+    assert not (tmp_path / "large.wav").exists()
+
+
+def test_voice_upload_rejects_large_content_length_before_multipart_spooling(tmp_path) -> None:
+    client = TestClient(
+        create_app(
+            runtime=MockSpeechRuntime(),
+            config=ServerConfig(voices_dir=tmp_path, max_voice_upload_bytes=3),
+        )
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("large.wav", b"x" * 70000, "audio/wav")},
+        data={"voice_id": "large"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "voice_file_too_large"
+    assert not (tmp_path / "large.wav").exists()
+
+
+def test_voice_upload_without_content_length_installs_streamed_request_limit() -> None:
+    messages = [
+        {"type": "http.request", "body": b"1" * 70000, "more_body": False},
+    ]
+
+    async def receive():
+        return messages.pop(0)
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/audio/voices",
+            "headers": [],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "client": ("testclient", 50000),
+        },
+        receive,
+    )
+
+    _install_voice_upload_size_guard(
+        ServerConfig(max_voice_upload_bytes=1),
+        request,
+    )
+
+    async def read_stream() -> None:
+        async for _chunk in request.stream():
+            pass
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(read_stream())
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.detail["error"]["code"] == "voice_file_too_large"
+
+
+def test_voice_list_ignores_wav_files_with_unmanaged_ids(tmp_path) -> None:
+    voices_dir = tmp_path / "voices"
+    voices_dir.mkdir()
+    (voices_dir / "sample.wav").write_bytes(b"wav")
+    (voices_dir / "speaker.v1.wav").write_bytes(b"wav")
+    (voices_dir / "upper.WAV").write_bytes(b"wav")
+
+    response = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=voices_dir))
+    ).get("/v1/audio/voices")
+
+    assert response.status_code == 200
+    assert [voice["id"] for voice in response.json()["data"]] == ["sample"]
+
+
+def test_voice_resolution_ignores_symlinked_wav_files(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    outside_target = tmp_path / "outside.wav"
+    outside_target.write_bytes(b"outside")
+    voices_dir = tmp_path / "voices"
+    voices_dir.mkdir()
+    (voices_dir / "sample.wav").symlink_to(outside_target)
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=voices_dir)))
+
+    listed = client.get("/v1/audio/voices")
+    fetched = client.get("/v1/audio/voices/sample")
+    speech = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+        },
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["data"] == []
+    assert fetched.status_code == 404
+    assert speech.status_code == 200
+    assert runtime.requests[-1].irodori == {}
+
+
+def test_managed_voice_does_not_override_explicit_irodori_reference_options(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+            "irodori": {"no_reference": True, "caption": "calm"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].irodori == {"no_reference": True, "caption": "calm"}
+
+
+@pytest.mark.parametrize("voice", ["../sample", "my.voice", "voice:v1"])
+def test_audio_speech_treats_unmanaged_punctuated_voice_as_reference_miss(
+    tmp_path, voice
+) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": voice,
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].voice == voice
+    assert runtime.requests[-1].irodori == {}
+
+
+def test_voice_replace_rejects_symlink_without_overwriting_target(tmp_path) -> None:
+    outside_target = tmp_path / "outside.wav"
+    outside_target.write_bytes(b"outside")
+    voice_path = tmp_path / "sample.wav"
+    voice_path.symlink_to(outside_target)
+
+    with pytest.raises(ValueError, match="symbolic links"):
+        VoiceRegistry(tmp_path).write_file(
+            voice_id="sample",
+            filename="sample.wav",
+            data=b"replacement",
+            replace=True,
+        )
+
+    assert outside_target.read_bytes() == b"outside"
+
+
+def test_voice_create_uses_atomic_exclusive_file_creation(tmp_path) -> None:
+    registry = VoiceRegistry(tmp_path)
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+    lock = threading.Lock()
+
+    def create_voice() -> None:
+        barrier.wait(timeout=2)
+        try:
+            registry.write_file(
+                voice_id="sample",
+                filename="sample.wav",
+                data=b"wav",
+                replace=False,
+            )
+        except FileExistsError:
+            outcome = "exists"
+        else:
+            outcome = "created"
+        with lock:
+            outcomes.append(outcome)
+
+    threads = [threading.Thread(target=create_voice) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert sorted(outcomes) == ["created", "exists"]
+    assert (tmp_path / "sample.wav").read_bytes() == b"wav"
 
 
 def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
@@ -653,6 +1160,13 @@ def test_server_config_rejects_non_finite_queue_timeout_env(monkeypatch, value: 
         server_config_from_env()
 
 
+def test_server_config_rejects_non_positive_voice_upload_limit_env(monkeypatch) -> None:
+    monkeypatch.setenv("IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES", "0")
+
+    with pytest.raises(ValueError, match="IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES"):
+        server_config_from_env()
+
+
 def test_invalid_server_env_keeps_health_available_and_blocks_openai_routes(monkeypatch) -> None:
     monkeypatch.setenv("IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS", "nan")
 
@@ -665,6 +1179,12 @@ def test_invalid_server_env_keeps_health_available_and_blocks_openai_routes(monk
         "auth_enabled": False,
         "max_concurrent_synthesis": 1,
         "queue_timeout_seconds": 30.0,
+        "voices": {
+            "dir": "voices",
+            "dir_exists": health_response.json()["server"]["voices"]["dir_exists"],
+            "files": 0,
+            "formats": [".wav"],
+        },
         "status": "configuration_error",
         "error": {
             "code": "server_configuration_error",
