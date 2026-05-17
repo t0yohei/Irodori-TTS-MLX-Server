@@ -110,7 +110,8 @@ The response includes:
 - `server.auth_enabled`: whether `/v1/*` bearer auth is enabled.
 - `server.max_concurrent_synthesis` and `server.queue_timeout_seconds`: active
   queue controls.
-- `server.configuration_error`: present when server env values are invalid.
+- `server.status: "configuration_error"` with `server.error.code:
+  "server_configuration_error"`: present when server env values are invalid.
 
 For deployment checks, combine `/health` with a real WAV smoke request from
 [real_model_setup.md](real_model_setup.md). `/health` does not synthesize audio
@@ -141,7 +142,7 @@ Common startup and runtime failures:
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | `/health` shows `runtime: unconfigured` | No weights source was set. | Configure one supported weight source from [real_model_setup.md](real_model_setup.md). |
-| `/health` shows `configuration_error` | Runtime env parsing or direct `.npz` config is invalid. | Check `last_load_error`; fix integer, boolean, or missing config values. |
+| `/health` shows `server.status: "configuration_error"` | Server env parsing failed, commonly an invalid concurrency or queue timeout value. | Check `server.error.message`; fix integer, boolean, or missing server config values. |
 | `/v1/*` returns `server_configuration_error` | Server env parsing failed, commonly an invalid concurrency or queue timeout value. | Fix `IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS` or `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS`, then restart. |
 | `/v1/*` returns `invalid_api_key` | Bearer token is enabled but missing or wrong. | Send `Authorization: Bearer <token>` and verify the active token source. |
 | `/v1/audio/speech` returns `runtime_unavailable` | Irodori-TTS-MLX deps, weights, or model config failed at load time. | Run with `IRODORI_MLX_PRELOAD=1`, inspect logs, and rerun the real setup smoke. |

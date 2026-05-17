@@ -45,6 +45,8 @@ def test_deployment_doc_covers_operational_configuration() -> None:
         "synthesis_queue_timeout",
         "curl --fail http://127.0.0.1:8000/health",
         "server.max_concurrent_synthesis",
+        "server.status",
+        "server.error.code",
         "runtime_unavailable",
         "server_configuration_error",
         "launchd",
