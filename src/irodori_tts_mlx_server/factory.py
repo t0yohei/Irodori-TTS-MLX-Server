@@ -242,6 +242,8 @@ def _apply_managed_voice_reference(
         voice_file = voice_registry.get_file(request.voice)
     except ValueError:
         return irodori_options
+    except OSError as exc:
+        raise _voice_storage_error(exc) from exc
     if voice_file is None:
         return irodori_options
 
@@ -398,6 +400,8 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             voice_file = voice_registry.get_file(voice_id)
         except ValueError as exc:
             raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
+        except OSError as exc:
+            raise _voice_storage_error(exc)
         if voice_file is None:
             raise openai_error(
                 f"Voice {voice_id!r} was not found.",

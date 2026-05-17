@@ -41,7 +41,7 @@ class VoiceRegistry:
         root = self.root
         files_error: str | None = None
         try:
-            files = len(self.list_files()) if root.is_dir() else 0
+            files = len(self.list_files())
         except OSError as exc:
             files = 0
             files_error = str(exc)
@@ -56,8 +56,8 @@ class VoiceRegistry:
         return metadata
 
     def list_files(self) -> list[VoiceFile]:
-        root = self.root
-        if not root.is_dir():
+        root = self._existing_root()
+        if root is None:
             return []
         return [
             VoiceFile(voice_id=path.stem, path=path)
@@ -120,8 +120,12 @@ class VoiceRegistry:
             if exc.errno == errno.ELOOP:
                 raise ValueError("Managed reference voice files must not be symbolic links.") from exc
             raise
-        with os.fdopen(descriptor, "wb") as voice_file:
-            voice_file.write(data)
+        try:
+            with os.fdopen(descriptor, "wb") as voice_file:
+                voice_file.write(data)
+        except OSError:
+            path.unlink(missing_ok=True)
+            raise
 
     def _replace_file(self, path: Path, data: bytes) -> None:
         if path.is_symlink():
@@ -149,11 +153,21 @@ class VoiceRegistry:
         return path
 
     def _path_for_existing_root(self, voice_id: str) -> Path:
-        root = self.root.resolve(strict=False)
+        root = self._existing_root()
+        if root is None:
+            root = self.root.resolve(strict=False)
         path = root / f"{voice_id}{VOICE_FILE_SUFFIX}"
         if path.parent != root:
             raise ValueError("voice_id must resolve inside the configured voices directory.")
         return path
+
+    def _existing_root(self) -> Path | None:
+        root = self.root
+        if not root.exists():
+            return None
+        if not root.is_dir():
+            raise NotADirectoryError(f"Configured voices directory is not a directory: {root}")
+        return root.resolve(strict=False)
 
     @staticmethod
     def validate_voice_id(voice_id: str) -> None:

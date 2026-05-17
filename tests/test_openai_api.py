@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+import irodori_tts_mlx_server.voices as voice_module
 from irodori_tts_mlx_server import create_app
 from irodori_tts_mlx_server.config import ServerConfig, server_config_from_env
 from irodori_tts_mlx_server.factory import _reject_oversized_voice_upload_request
@@ -260,6 +261,33 @@ def test_voice_upload_reports_storage_errors(monkeypatch, tmp_path) -> None:
     assert response.json()["error"]["code"] == "voice_storage_unavailable"
 
 
+def test_voice_create_removes_partial_file_after_write_failure(monkeypatch, tmp_path) -> None:
+    class FailingVoiceFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def write(self, data):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(voice_module.os, "fdopen", lambda *args, **kwargs: FailingVoiceFile())
+    client = TestClient(
+        create_app(runtime=MockSpeechRuntime(), config=ServerConfig(voices_dir=tmp_path))
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "voice_storage_unavailable"
+    assert not (tmp_path / "sample.wav").exists()
+
+
 def test_voice_delete_reports_storage_errors(monkeypatch, tmp_path) -> None:
     def fail_delete_file(*args, **kwargs):
         raise PermissionError("permission denied")
@@ -291,6 +319,37 @@ def test_voice_upload_reports_file_storage_root_as_storage_error(tmp_path) -> No
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "voice_storage_unavailable"
+
+
+def test_voice_read_routes_report_file_storage_root_as_storage_error(tmp_path) -> None:
+    voices_root = tmp_path / "voices"
+    voices_root.write_text("not a directory")
+    runtime = MockSpeechRuntime()
+    client = TestClient(
+        create_app(runtime=runtime, config=ServerConfig(voices_dir=voices_root))
+    )
+
+    listed = client.get("/v1/audio/voices")
+    fetched = client.get("/v1/audio/voices/sample")
+    speech = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+        },
+    )
+    health = client.get("/health")
+
+    assert listed.status_code == 503
+    assert listed.json()["error"]["code"] == "voice_storage_unavailable"
+    assert fetched.status_code == 503
+    assert fetched.json()["error"]["code"] == "voice_storage_unavailable"
+    assert speech.status_code == 503
+    assert speech.json()["error"]["code"] == "voice_storage_unavailable"
+    assert health.status_code == 200
+    assert "not a directory" in health.json()["server"]["voices"]["files_error"]
 
 
 def test_voice_list_reports_storage_errors_without_breaking_health(monkeypatch, tmp_path) -> None:
