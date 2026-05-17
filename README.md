@@ -98,7 +98,8 @@ OpenAI-compatible `curl` and Python client examples, including bearer auth,
 FFmpeg-backed response formats, and unsupported streaming behavior.
 See [docs/deployment.md](docs/deployment.md) for production-ish local deployment
 guidance covering Apple Silicon host assumptions, bearer auth, queue controls,
-health checks, logs, and a launchd example.
+health checks, logs, and the packaged launchd templates under
+[deployment/](deployment/).
 
 Configure the real MLX runtime with either a hosted converted-weights layout:
 

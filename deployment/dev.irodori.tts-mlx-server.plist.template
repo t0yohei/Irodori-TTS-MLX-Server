@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.irodori.tts-mlx-server</string>
+  <key>WorkingDirectory</key>
+  <string>/opt/irodori-tts-mlx-server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/irodori-tts-mlx-server/.venv/bin/irodori-tts-mlx-server</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8000</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>IRODORI_MLX_WEIGHTS_DIR</key>
+    <string>/opt/irodori-models/voicedesign-v2</string>
+    <key>IRODORI_MLX_PRELOAD</key>
+    <string>1</string>
+    <key>IRODORI_MLX_MODEL_ID</key>
+    <string>irodori-tts-mlx</string>
+    <key>IRODORI_MLX_CODEC_RUNTIME_MODE</key>
+    <string>persistent</string>
+    <key>IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS</key>
+    <string>1</string>
+    <key>IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS</key>
+    <string>60</string>
+    <key>IRODORI_SERVER_VOICES_DIR</key>
+    <string>/opt/irodori-tts-mlx-data/voices</string>
+    <key>IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES</key>
+    <string>52428800</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/opt/irodori-tts-mlx-data/logs/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/opt/irodori-tts-mlx-data/logs/server.err.log</string>
+</dict>
+</plist>

@@ -7,6 +7,12 @@ concurrency, and explicit health checks. It assumes the real runtime setup from
 [real_model_setup.md](real_model_setup.md) is already complete; keep converted
 weights and runtime dependency details there instead of duplicating them here.
 
+The packaged deployment target for this repository is a macOS launchd service
+template plus an environment example for local Apple Silicon hosts. Docker and
+Compose are intentionally not the default path: MLX expects the macOS/Apple
+Silicon runtime and this project should not imply CUDA or PyTorch container
+support.
+
 ## Recommended Launch Command
 
 Run the server from a dedicated virtual environment and pin the model artifact
@@ -65,6 +71,11 @@ Optional runtime and server controls:
 | `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS` | `30` | Seconds a request waits for a synthesis slot before returning `synthesis_queue_timeout`; `0` disables waiting. |
 | `IRODORI_SERVER_VOICES_DIR` | `voices` | Directory used by `/v1/audio/voices` for managed WAV reference uploads. Keep this outside the repository for long-running deployments. |
 | `IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES` | `52428800` | Maximum accepted managed voice upload size before returning `voice_file_too_large`. |
+
+The checked-in [deployment/local.env.example](../deployment/local.env.example)
+contains the same operational knobs in copyable form. Keep the edited copy
+outside the repository, especially when adding bearer tokens or host-specific
+paths.
 
 ## Auth and Network Binding
 
@@ -153,59 +164,100 @@ Common startup and runtime failures:
 | `/v1/audio/speech` returns `synthesis_queue_timeout` | All synthesis slots are busy. | Increase client backoff or queue timeout before raising concurrency. |
 | Process exits immediately under launchd | Bad working directory, venv path, or env file. | Run the launch command manually as the same user, then check launchd stderr. |
 
-## launchd Example
+## Packaged Local launchd Deployment
 
-Use a plist when the server should start at login for one macOS user. Adjust
-paths, model source, and token loading for your host; keep secrets out of the
-repository.
+Use launchd when the server should start at login for one macOS user. The
+checked-in template is
+[deployment/dev.irodori.tts-mlx-server.plist.template](../deployment/dev.irodori.tts-mlx-server.plist.template).
+It uses the installed `irodori-tts-mlx-server` console script, binds to
+`127.0.0.1:8000`, keeps MLX concurrency at `1`, preloads weights, and stores
+managed WAV voices and logs outside the repository.
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>dev.irodori.tts-mlx-server</string>
-  <key>WorkingDirectory</key>
-  <string>/opt/irodori-tts-mlx-server</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/opt/irodori-tts-mlx-server/.venv/bin/python</string>
-    <string>-m</string>
-    <string>irodori_tts_mlx_server</string>
-    <string>--host</string>
-    <string>127.0.0.1</string>
-    <string>--port</string>
-    <string>8000</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>IRODORI_MLX_WEIGHTS_DIR</key>
-    <string>/opt/irodori-models/voicedesign-v2</string>
-    <key>IRODORI_MLX_PRELOAD</key>
-    <string>1</string>
-    <key>IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS</key>
-    <string>1</string>
-    <key>IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS</key>
-    <string>60</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>/opt/irodori-tts-mlx-server/logs/server.log</string>
-  <key>StandardErrorPath</key>
-  <string>/opt/irodori-tts-mlx-server/logs/server.err.log</string>
-</dict>
-</plist>
+First run on a fresh host:
+
+```bash
+sudo mkdir -p /opt/irodori-tts-mlx-server /opt/irodori-tts-mlx-data /opt/irodori-models
+sudo chown -R "$USER":staff /opt/irodori-tts-mlx-server /opt/irodori-tts-mlx-data /opt/irodori-models
+git clone https://github.com/t0yohei/Irodori-TTS-MLX-Server.git /opt/irodori-tts-mlx-server
+cd /opt/irodori-tts-mlx-server
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e .
 ```
 
-Load it after validating the command manually:
+Install the external Irodori-TTS-MLX runtime package and place converted weights
+using [real_model_setup.md](real_model_setup.md). Then copy and edit the local
+templates:
+
+```bash
+mkdir -p /opt/irodori-tts-mlx-data/voices /opt/irodori-tts-mlx-data/logs
+cp deployment/local.env.example /opt/irodori-tts-mlx-data/local.env
+cp deployment/dev.irodori.tts-mlx-server.plist.template \
+  ~/Library/LaunchAgents/dev.irodori.tts-mlx-server.plist
+plutil -lint ~/Library/LaunchAgents/dev.irodori.tts-mlx-server.plist
+```
+
+launchd does not read shell-style `.env` files directly. Keep
+`local.env.example` as the source of truth for host values, then copy those
+values into the plist `EnvironmentVariables` dictionary or use a small private
+wrapper script that exports the file before `exec`-ing the console script. Do
+not store bearer tokens in the checked-in template; load
+`IRODORI_SERVER_BEARER_TOKEN` from macOS Keychain in the wrapper when auth is
+enabled.
+
+Before loading launchd, validate the same command manually:
+
+```bash
+IRODORI_MLX_WEIGHTS_DIR=/opt/irodori-models/voicedesign-v2 \
+IRODORI_MLX_PRELOAD=1 \
+IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS=1 \
+IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS=60 \
+IRODORI_SERVER_VOICES_DIR=/opt/irodori-tts-mlx-data/voices \
+/opt/irodori-tts-mlx-server/.venv/bin/irodori-tts-mlx-server --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+
+```bash
+curl --fail http://127.0.0.1:8000/health
+```
+
+Load and restart the service:
 
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.irodori.tts-mlx-server.plist
 launchctl kickstart -k gui/$(id -u)/dev.irodori.tts-mlx-server
 curl --fail http://127.0.0.1:8000/health
 ```
+
+Inspect logs and service state:
+
+```bash
+launchctl print gui/$(id -u)/dev.irodori.tts-mlx-server
+tail -n 100 /opt/irodori-tts-mlx-data/logs/server.err.log
+tail -n 100 /opt/irodori-tts-mlx-data/logs/server.log
+```
+
+The plist template writes stdout and stderr through `StandardOutPath` and
+`StandardErrorPath`; keep those paths writable by the launchd user.
+
+Upgrade or restart after changing package versions, weights, or environment:
+
+```bash
+cd /opt/irodori-tts-mlx-server
+git pull --ff-only
+source .venv/bin/activate
+python -m pip install -U -e .
+launchctl kickstart -k gui/$(id -u)/dev.irodori.tts-mlx-server
+```
+
+Failure recovery:
+
+- If `plutil -lint` fails, fix the plist before loading it.
+- If launchd exits immediately, run the manual command as the same user and
+  check `server.err.log`.
+- If `/health` reports `configuration_error`, fix the invalid env value and
+  kickstart the service.
+- If `/health` reports a runtime load error, rerun the real model setup smoke
+  before changing service settings.
