@@ -168,6 +168,9 @@ def _apply_managed_voice_reference(
     if "reference_wav" in irodori_options or "no_reference" in irodori_options:
         return irodori_options
 
+    if not voice_registry.is_managed_voice_id(request.voice):
+        return irodori_options
+
     voice_file = voice_registry.get_file(request.voice)
     if voice_file is None:
         return irodori_options

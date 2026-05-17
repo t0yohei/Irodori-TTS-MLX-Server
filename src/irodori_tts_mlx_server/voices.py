@@ -101,7 +101,11 @@ class VoiceRegistry:
 
     @staticmethod
     def validate_voice_id(voice_id: str) -> None:
-        if not voice_id or VOICE_ID_PATTERN.fullmatch(voice_id) is None:
+        if not VoiceRegistry.is_managed_voice_id(voice_id):
             raise ValueError(
                 "voice_id must contain only ASCII letters, numbers, underscores, or hyphens."
             )
+
+    @staticmethod
+    def is_managed_voice_id(voice_id: str) -> bool:
+        return bool(voice_id and VOICE_ID_PATTERN.fullmatch(voice_id) is not None)

@@ -251,6 +251,28 @@ def test_managed_voice_does_not_override_explicit_irodori_reference_options(tmp_
     assert runtime.requests[-1].irodori == {"no_reference": True, "caption": "calm"}
 
 
+@pytest.mark.parametrize("voice", ["my.voice", "voice:v1"])
+def test_audio_speech_treats_unmanaged_punctuated_voice_as_reference_miss(
+    tmp_path, voice
+) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": voice,
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].voice == voice
+    assert runtime.requests[-1].irodori == {}
+
+
 def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
     runtime = BlockingSpeechRuntime()
     client = TestClient(
