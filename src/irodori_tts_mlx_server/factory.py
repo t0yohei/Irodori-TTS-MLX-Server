@@ -206,6 +206,18 @@ def _normalize_irodori_aliases(options: dict[str, Any]) -> None:
         )
 
 
+def _bool_like_option(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
 class VoiceUploadResponse(BaseModel):
     id: str
     object: Literal["voice_file"]
@@ -379,8 +391,12 @@ def _apply_managed_voice_reference(
     request: AudioSpeechRequest, voice_registry: VoiceRegistry
 ) -> dict[str, Any]:
     irodori_options = dict(request.irodori)
-    if "reference_wav" in irodori_options or irodori_options.get("no_reference") is True:
+    if "reference_wav" in irodori_options:
         return irodori_options
+    if "no_reference" in irodori_options:
+        no_reference = _bool_like_option(irodori_options["no_reference"])
+        if no_reference is not False:
+            return irodori_options
 
     if not voice_registry.is_managed_voice_id(request.voice):
         return irodori_options

@@ -584,6 +584,42 @@ def test_managed_voice_resolution_accepts_upstream_no_ref_false_alias(tmp_path) 
     }
 
 
+@pytest.mark.parametrize(
+    "payload_patch",
+    [
+        {"irodori": {"no_reference": "true", "caption": "calm"}},
+        {"no_ref": "true", "irodori": {"caption": "calm"}},
+    ],
+)
+def test_managed_voice_resolution_respects_boolean_like_no_reference_true(
+    tmp_path, payload_patch
+) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+        }
+        | payload_patch,
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].irodori == {"no_reference": "true", "caption": "calm"}
+
+
 @pytest.mark.parametrize("voice", ["../sample", "my.voice", "voice:v1"])
 def test_audio_speech_treats_unmanaged_punctuated_voice_as_reference_miss(tmp_path, voice) -> None:
     runtime = MockSpeechRuntime()
