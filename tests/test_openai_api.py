@@ -237,6 +237,59 @@ def test_voice_management_rejects_bad_id_bad_extension_duplicate_and_empty_file(
     assert not (tmp_path.parent / "sample.wav").exists()
 
 
+def test_voice_upload_and_replace_reject_files_above_configured_limit(tmp_path) -> None:
+    client = TestClient(
+        create_app(
+            runtime=MockSpeechRuntime(),
+            config=ServerConfig(voices_dir=tmp_path, max_voice_upload_bytes=3),
+        )
+    )
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    too_large = client.post(
+        "/v1/audio/voices",
+        files={"file": ("large.wav", b"1234", "audio/wav")},
+        data={"voice_id": "large"},
+    )
+    replace_too_large = client.put(
+        "/v1/audio/voices/sample",
+        files={"file": ("sample.wav", b"1234", "audio/wav")},
+    )
+
+    assert too_large.status_code == 413
+    assert too_large.json()["error"]["code"] == "voice_file_too_large"
+    assert replace_too_large.status_code == 413
+    assert replace_too_large.json()["error"]["code"] == "voice_file_too_large"
+    assert (tmp_path / "sample.wav").read_bytes() == b"wav"
+    assert not (tmp_path / "large.wav").exists()
+
+
+def test_voice_upload_rejects_large_content_length_before_multipart_spooling(tmp_path) -> None:
+    client = TestClient(
+        create_app(
+            runtime=MockSpeechRuntime(),
+            config=ServerConfig(voices_dir=tmp_path, max_voice_upload_bytes=3),
+        )
+    )
+
+    response = client.post(
+        "/v1/audio/voices",
+        files={"file": ("large.wav", b"x" * 70000, "audio/wav")},
+        data={"voice_id": "large"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "voice_file_too_large"
+    assert not (tmp_path / "large.wav").exists()
+
+
 def test_voice_list_ignores_wav_files_with_unmanaged_ids(tmp_path) -> None:
     voices_dir = tmp_path / "voices"
     voices_dir.mkdir()
@@ -249,6 +302,34 @@ def test_voice_list_ignores_wav_files_with_unmanaged_ids(tmp_path) -> None:
 
     assert response.status_code == 200
     assert [voice["id"] for voice in response.json()["data"]] == ["sample"]
+
+
+def test_voice_resolution_ignores_symlinked_wav_files(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    outside_target = tmp_path / "outside.wav"
+    outside_target.write_bytes(b"outside")
+    voices_dir = tmp_path / "voices"
+    voices_dir.mkdir()
+    (voices_dir / "sample.wav").symlink_to(outside_target)
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=voices_dir)))
+
+    listed = client.get("/v1/audio/voices")
+    fetched = client.get("/v1/audio/voices/sample")
+    speech = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+        },
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["data"] == []
+    assert fetched.status_code == 404
+    assert speech.status_code == 200
+    assert runtime.requests[-1].irodori == {}
 
 
 def test_managed_voice_does_not_override_explicit_irodori_reference_options(tmp_path) -> None:
@@ -879,6 +960,13 @@ def test_server_config_rejects_non_finite_queue_timeout_env(monkeypatch, value: 
     monkeypatch.setenv("IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS", value)
 
     with pytest.raises(ValueError, match="IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS"):
+        server_config_from_env()
+
+
+def test_server_config_rejects_non_positive_voice_upload_limit_env(monkeypatch) -> None:
+    monkeypatch.setenv("IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES", "0")
+
+    with pytest.raises(ValueError, match="IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES"):
         server_config_from_env()
 
 

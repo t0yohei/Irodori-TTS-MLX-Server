@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,7 +53,8 @@ class VoiceRegistry:
         return [
             VoiceFile(voice_id=path.stem, path=path)
             for path in sorted(root.iterdir(), key=lambda item: item.name)
-            if path.is_file()
+            if not path.is_symlink()
+            and path.is_file()
             and path.suffix.lower() == VOICE_FILE_SUFFIX
             and self.is_managed_voice_id(path.stem)
         ]
@@ -60,7 +62,7 @@ class VoiceRegistry:
     def get_file(self, voice_id: str) -> VoiceFile | None:
         self.validate_voice_id(voice_id)
         path = self._path_for_existing_root(voice_id)
-        if not path.is_file():
+        if path.is_symlink() or not path.is_file():
             return None
         return VoiceFile(voice_id=voice_id, path=path)
 
@@ -72,8 +74,26 @@ class VoiceRegistry:
             raise ValueError("Voice file must not be empty.")
 
         path = self._path_for(voice_id)
-        flags = os.O_WRONLY | os.O_CREAT
-        flags |= os.O_TRUNC if replace else os.O_EXCL
+        if replace:
+            self._replace_file(path, data)
+        else:
+            self._create_file(path, data, voice_id=voice_id)
+        return VoiceFile(voice_id=voice_id, path=path)
+
+    def delete_file(self, voice_id: str) -> bool:
+        existing = self.get_file(voice_id)
+        if existing is None:
+            return False
+        existing.path.unlink()
+        return True
+
+    def ensure_dir(self) -> Path:
+        root = self.root
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _create_file(self, path: Path, data: bytes, *, voice_id: str) -> None:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         try:
@@ -88,19 +108,24 @@ class VoiceRegistry:
             raise
         with os.fdopen(descriptor, "wb") as voice_file:
             voice_file.write(data)
-        return VoiceFile(voice_id=voice_id, path=path)
 
-    def delete_file(self, voice_id: str) -> bool:
-        existing = self.get_file(voice_id)
-        if existing is None:
-            return False
-        existing.path.unlink()
-        return True
-
-    def ensure_dir(self) -> Path:
-        root = self.root
-        root.mkdir(parents=True, exist_ok=True)
-        return root
+    def _replace_file(self, path: Path, data: bytes) -> None:
+        if path.is_symlink():
+            raise ValueError("Managed reference voice files must not be symbolic links.")
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                temp_file.write(data)
+            os.replace(temp_path, path)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
     def _path_for(self, voice_id: str) -> Path:
         root = self.ensure_dir().resolve(strict=False)

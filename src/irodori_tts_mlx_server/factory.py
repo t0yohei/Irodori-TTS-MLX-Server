@@ -105,6 +105,54 @@ class SynthesisLimiter:
             self._semaphore.release()
 
 
+VOICE_UPLOAD_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+def _is_voice_upload_route(request: Request) -> bool:
+    return request.method in {"POST", "PUT"} and (
+        request.url.path == "/v1/audio/voices"
+        or request.url.path.startswith("/v1/audio/voices/")
+    )
+
+
+def _voice_file_too_large_error(max_bytes: int) -> HTTPException:
+    return openai_error(
+        f"Voice file must be no larger than {max_bytes} bytes.",
+        status_code=413,
+        param="file",
+        code="voice_file_too_large",
+    )
+
+
+def _reject_oversized_voice_upload_request(config: ServerConfig, request: Request) -> None:
+    if not _is_voice_upload_route(request):
+        return
+    content_length = request.headers.get("content-length")
+    if content_length is None:
+        return
+    try:
+        request_bytes = int(content_length)
+    except ValueError as exc:
+        raise openai_error(
+            "Invalid Content-Length header.",
+            status_code=400,
+            param="content-length",
+            code="invalid_content_length",
+        ) from exc
+    max_request_bytes = config.max_voice_upload_bytes + VOICE_UPLOAD_MULTIPART_OVERHEAD_BYTES
+    if request_bytes > max_request_bytes:
+        raise _voice_file_too_large_error(config.max_voice_upload_bytes)
+
+
+async def _read_voice_upload(file: UploadFile, *, max_bytes: int) -> bytes:
+    data = bytearray()
+    while chunk := await file.read(1024 * 1024):
+        data.extend(chunk)
+        if len(data) > max_bytes:
+            raise _voice_file_too_large_error(max_bytes)
+    return bytes(data)
+
+
 def _server_configuration_error(message: str) -> HTTPException:
     return openai_error(
         message,
@@ -207,6 +255,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
         if api_request.url.path.startswith("/v1/"):
             try:
                 _require_bearer_auth(server_config, api_request)
+                _reject_oversized_voice_upload_request(server_config, api_request)
             except HTTPException as exc:
                 return _authentication_error_response(exc)
         return await call_next(api_request)
@@ -305,7 +354,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
         _require_bearer_auth(server_config, api_request)
         filename = file.filename or ""
         resolved_voice_id = (voice_id or filename.rsplit(".", 1)[0]).strip()
-        data = await file.read()
+        data = await _read_voice_upload(file, max_bytes=server_config.max_voice_upload_bytes)
         try:
             voice_file = voice_registry.write_file(
                 voice_id=resolved_voice_id,
@@ -352,7 +401,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             voice_file = voice_registry.write_file(
                 voice_id=voice_id,
                 filename=file.filename or "",
-                data=await file.read(),
+                data=await _read_voice_upload(file, max_bytes=server_config.max_voice_upload_bytes),
                 replace=True,
             )
         except FileNotFoundError:

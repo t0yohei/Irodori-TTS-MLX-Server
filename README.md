@@ -145,6 +145,8 @@ underscores, or hyphens. Uploaded files are always stored as
 `irodori.no_reference=false` unless the request already supplies explicit
 reference or no-reference options. This route does not resolve arbitrary
 client-supplied file paths, alias files, latent references, or remote URLs.
+Uploads are capped by `IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES`, which defaults
+to 50 MiB.
 
 Security note: the management API does not resolve arbitrary client-supplied file paths.
 

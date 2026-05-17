@@ -16,6 +16,7 @@ class ServerConfig:
     max_concurrent_synthesis: int = 1
     queue_timeout_seconds: float = 30.0
     voices_dir: Path = Path("voices")
+    max_voice_upload_bytes: int = 50 * 1024 * 1024
 
     @property
     def auth_enabled(self) -> bool:
@@ -50,13 +51,19 @@ def server_config_from_env() -> ServerConfig:
     max_concurrent_synthesis = _env_int("IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS", default=1)
     queue_timeout_seconds = _env_float("IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS", default=30.0)
     voices_dir = Path(os.getenv("IRODORI_SERVER_VOICES_DIR") or "voices")
+    max_voice_upload_bytes = _env_int(
+        "IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES", default=50 * 1024 * 1024
+    )
     if max_concurrent_synthesis < 1:
         raise ValueError("IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS must be >= 1.")
     if queue_timeout_seconds < 0:
         raise ValueError("IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS must be >= 0.")
+    if max_voice_upload_bytes < 1:
+        raise ValueError("IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES must be >= 1.")
     return ServerConfig(
         bearer_token=token,
         max_concurrent_synthesis=max_concurrent_synthesis,
         queue_timeout_seconds=queue_timeout_seconds,
         voices_dir=voices_dir,
+        max_voice_upload_bytes=max_voice_upload_bytes,
     )
