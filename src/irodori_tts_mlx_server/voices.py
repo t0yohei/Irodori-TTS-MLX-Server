@@ -62,13 +62,20 @@ class VoiceRegistry:
         root = self._existing_root()
         if root is None:
             return []
+        voice_ids: set[str] = set()
+        for path in sorted(root.iterdir(), key=lambda item: item.name):
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or path.suffix not in VOICE_FILE_SUFFIXES
+                or not self.is_managed_voice_id(path.stem)
+            ):
+                continue
+            voice_ids.add(path.stem)
         return [
-            VoiceFile(voice_id=path.stem, path=path)
-            for path in sorted(root.iterdir(), key=lambda item: item.name)
-            if not path.is_symlink()
-            and path.is_file()
-            and path.suffix in VOICE_FILE_SUFFIXES
-            and self.is_managed_voice_id(path.stem)
+            voice_file
+            for voice_id in sorted(voice_ids)
+            if (voice_file := self.get_file(voice_id)) is not None
         ]
 
     def get_file(self, voice_id: str) -> VoiceFile | None:
@@ -106,7 +113,9 @@ class VoiceRegistry:
         existing = self.get_file(voice_id)
         if existing is None:
             return False
-        existing.path.unlink()
+        for candidate in self._candidate_paths(existing.path.parent, voice_id):
+            if candidate.is_file():
+                candidate.unlink()
         return True
 
     def ensure_dir(self) -> Path:
@@ -168,7 +177,7 @@ class VoiceRegistry:
                 temp_file.write(data)
             os.replace(temp_path, path)
             for candidate in self._candidate_paths(path.parent, voice_id):
-                if candidate != path and candidate.exists():
+                if candidate != path and candidate.is_file():
                     candidate.unlink()
         finally:
             if temp_path is not None:

@@ -690,6 +690,23 @@ def test_voice_replace_rejects_symlink_without_overwriting_target(tmp_path) -> N
     assert outside_target.read_bytes() == b"outside"
 
 
+def test_voice_replace_ignores_same_id_extension_directory(tmp_path) -> None:
+    (tmp_path / "sample.wav").write_bytes(b"old wav")
+    (tmp_path / "sample.mp3").mkdir()
+
+    voice_file = VoiceRegistry(tmp_path).write_file(
+        voice_id="sample",
+        filename="sample.flac",
+        data=b"new flac",
+        replace=True,
+    )
+
+    assert voice_file.path == tmp_path / "sample.flac"
+    assert (tmp_path / "sample.flac").read_bytes() == b"new flac"
+    assert not (tmp_path / "sample.wav").exists()
+    assert (tmp_path / "sample.mp3").is_dir()
+
+
 def test_voice_create_uses_atomic_exclusive_file_creation(tmp_path) -> None:
     registry = VoiceRegistry(tmp_path)
     barrier = threading.Barrier(2)
@@ -756,6 +773,21 @@ def test_voice_create_keeps_voice_id_unique_across_extensions(tmp_path) -> None:
     assert sorted(outcomes) in (["exists", "sample.flac"], ["exists", "sample.wav"])
     assert len(list(tmp_path.glob("sample.*"))) == 1
     assert not (tmp_path / ".sample.create.lock").exists()
+
+
+def test_voice_list_and_delete_handle_preexisting_duplicate_extensions(tmp_path) -> None:
+    (tmp_path / "sample.wav").write_bytes(b"wav")
+    (tmp_path / "sample.flac").write_bytes(b"flac")
+
+    registry = VoiceRegistry(tmp_path)
+    listed = registry.list_files()
+    deleted = registry.delete_file("sample")
+
+    assert [voice.voice_id for voice in listed] == ["sample"]
+    assert listed[0].path == tmp_path / "sample.wav"
+    assert deleted is True
+    assert not (tmp_path / "sample.wav").exists()
+    assert not (tmp_path / "sample.flac").exists()
 
 
 def test_audio_speech_times_out_when_synthesis_queue_is_full() -> None:
