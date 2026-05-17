@@ -561,6 +561,72 @@ def test_managed_voice_does_not_override_explicit_irodori_reference_options(tmp_
     assert runtime.requests[-1].irodori == {"no_reference": True, "caption": "calm"}
 
 
+def test_managed_voice_resolution_accepts_upstream_no_ref_false_alias(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+            "no_ref": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].irodori == {
+        "no_reference": False,
+        "reference_wav": str(tmp_path / "sample.wav"),
+    }
+
+
+@pytest.mark.parametrize(
+    "payload_patch",
+    [
+        {"irodori": {"no_reference": "true", "caption": "calm"}},
+        {"no_ref": "true", "irodori": {"caption": "calm"}},
+    ],
+)
+def test_managed_voice_resolution_respects_boolean_like_no_reference_true(
+    tmp_path, payload_patch
+) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+        }
+        | payload_patch,
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].irodori == {"no_reference": "true", "caption": "calm"}
+
+
 @pytest.mark.parametrize("voice", ["../sample", "my.voice", "voice:v1"])
 def test_audio_speech_treats_unmanaged_punctuated_voice_as_reference_miss(tmp_path, voice) -> None:
     runtime = MockSpeechRuntime()
@@ -835,6 +901,170 @@ def test_audio_speech_accepts_voicedesign_caption_no_reference_options() -> None
     ]
 
 
+def test_audio_speech_accepts_upstream_style_top_level_option_aliases() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "no_ref": True,
+            "seconds": 2.5,
+            "duration_scale": 0.9,
+            "num_steps": 24,
+            "seed": 7,
+            "cfg_scale_text": 3.1,
+            "cfg_scale_caption": 3.2,
+            "cfg_scale_speaker": 5.1,
+            "cfg_guidance_mode": "independent",
+            "cfg_min_t": 0.2,
+            "cfg_max_t": 0.8,
+            "max_ref_seconds": 12.0,
+            "context_kv_cache": False,
+            "chunking_enabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[0].irodori == {
+        "no_reference": True,
+        "seconds": 2.5,
+        "duration_scale": 0.9,
+        "num_steps": 24,
+        "seed": 7,
+        "cfg_scale_text": 3.1,
+        "cfg_scale_caption": 3.2,
+        "cfg_scale_speaker": 5.1,
+        "cfg_guidance_mode": "independent",
+        "cfg_min_t": 0.2,
+        "cfg_max_t": 0.8,
+        "max_reference_seconds": 12.0,
+        "no_context_kv_cache": True,
+        "chunking": False,
+    }
+
+
+def test_audio_speech_accepts_upstream_style_irodori_option_aliases() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "ref_wav": "/tmp/reference.wav",
+                "no_ref": False,
+                "max_ref_seconds": 10,
+                "context_kv_cache": True,
+                "chunking_enabled": False,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[0].irodori == {
+        "reference_wav": "/tmp/reference.wav",
+        "no_reference": False,
+        "max_reference_seconds": 10,
+        "no_context_kv_cache": False,
+        "chunking": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload_patch", "expected_irodori"),
+    [
+        (
+            {"no_ref": False, "irodori": {"no_reference": "false"}},
+            {"no_reference": False},
+        ),
+        (
+            {"context_kv_cache": True, "irodori": {"no_context_kv_cache": "false"}},
+            {"no_context_kv_cache": False},
+        ),
+        (
+            {"chunking_enabled": False, "irodori": {"chunking": "false"}},
+            {"chunking": False},
+        ),
+    ],
+)
+def test_audio_speech_accepts_semantically_equal_bool_alias_values(
+    payload_patch, expected_irodori
+) -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "voicedesign",
+            "response_format": "wav",
+        }
+        | payload_patch,
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[0].irodori == expected_irodori
+
+
+@pytest.mark.parametrize("unsupported", ["ref_latent", "chunk_min_chars"])
+def test_audio_speech_rejects_unsupported_upstream_irodori_options(unsupported) -> None:
+    response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {unsupported: "value"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert response.json()["error"]["code"] == "validation_error"
+    assert unsupported in response.json()["error"]["message"]
+
+
+def test_audio_speech_rejects_conflicting_alias_values() -> None:
+    response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "no_ref": True,
+            "irodori": {"no_reference": False},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+    assert "conflicts with irodori.no_reference" in response.json()["error"]["message"]
+
+
+def test_audio_speech_rejects_top_level_reference_path_alias() -> None:
+    response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "ref_wav": "/tmp/reference.wav",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["param"] == "ref_wav"
+    assert response.json()["error"]["code"] == "validation_error"
+
+
 def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
@@ -921,6 +1151,23 @@ def test_audio_speech_rejects_streaming_requests() -> None:
         "param": "stream",
         "code": "unsupported_streaming",
     }
+
+
+def test_audio_speech_rejects_upstream_stream_format() -> None:
+    response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+            "stream_format": "sse",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["param"] == "stream_format"
+    assert response.json()["error"]["code"] == "unsupported_streaming"
 
 
 def test_audio_speech_rejects_sse_accept_header() -> None:

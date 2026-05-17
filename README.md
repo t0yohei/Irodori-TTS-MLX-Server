@@ -143,7 +143,8 @@ underscores, or hyphens. Uploaded files are always stored as
 `<voice_id>.wav` inside that directory, and speech requests that set
 `voice` to a managed ID automatically receive `irodori.reference_wav` and
 `irodori.no_reference=false` unless the request already supplies explicit
-reference or no-reference options. This route does not resolve arbitrary
+reference options or `irodori.no_reference=true`. Upstream-style `no_ref=false`
+still allows managed voice resolution. This route does not resolve arbitrary
 client-supplied file paths, alias files, latent references, or remote URLs.
 Uploads are capped by `IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES`, which defaults
 to 50 MiB.
@@ -193,7 +194,11 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 ```
 
 Requests accept `model`, `input`, `voice`, `response_format`, `speed`, and
-an `irodori` options object. `response_format=wav` and `response_format=pcm`
+an `irodori` options object. For upstream client compatibility, unambiguous
+top-level runtime option aliases such as `no_ref`, `seconds`, `duration_scale`,
+`num_steps`, `seed`, `cfg_scale_*`, `max_ref_seconds`, `context_kv_cache`, and
+`chunking_enabled` are normalized into `irodori`. `response_format=wav` and
+`response_format=pcm`
 work without optional encoders. `mp3`, `flac`, `opus`, and `aac` use FFmpeg
 when it is installed; otherwise the server returns an OpenAI-style error with
 setup guidance. Streaming responses are not supported and return an
@@ -205,6 +210,11 @@ Supported `irodori` runtime options include `reference_wav`, `no_reference`,
 `cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, `no_context_kv_cache`,
 `chunking`, `chunk_max_chars`, `tail_trim_ms`, `tail_silence_trim_ms`,
 `tail_silence_keep_ms`, and `tail_silence_threshold`.
+The upstream `irodori` aliases `ref_wav`, `no_ref`, `max_ref_seconds`,
+`context_kv_cache`, and `chunking_enabled` are also accepted when they map
+cleanly to the MLX runtime. Unsupported or ambiguous upstream options such as
+`lora_adapter`, `ref_latent`, `chunk_min_chars`, and PyTorch schedule-specific
+controls are rejected instead of being silently ignored.
 When `duration_scale` is omitted, OpenAI `speed` maps to
 `duration_scale=1/speed`.
 

@@ -201,7 +201,7 @@ def test_supported_upstream_style_request_fixture_is_forwarded_to_runtime() -> N
 @pytest.mark.parametrize(
     ("payload_patch", "status_code", "param", "code"),
     [
-        ({"stream_format": "sse"}, 422, "stream_format", "validation_error"),
+        ({"stream_format": "sse"}, 400, "stream_format", "unsupported_streaming"),
         ({"stream": True}, 400, "stream", "unsupported_streaming"),
         (
             {"irodori": {"no_reference": True, "num_steps": 0}},
