@@ -37,6 +37,8 @@
     <string>/opt/irodori-tts-mlx-data/voices</string>
     <key>IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES</key>
     <string>52428800</string>
+    <key>IRODORI_SERVER_REFERENCE_CACHE_MAX_ENTRIES</key>
+    <string>8</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

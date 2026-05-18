@@ -72,6 +72,7 @@ Optional runtime and server controls:
 | `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS` | `30` | Seconds a request waits for a synthesis slot before returning `synthesis_queue_timeout`; `0` disables waiting. |
 | `IRODORI_SERVER_VOICES_DIR` | `voices` | Directory used by `/v1/audio/voices` for managed WAV reference uploads. Keep this outside the repository for long-running deployments. |
 | `IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES` | `52428800` | Maximum accepted managed voice upload size before returning `voice_file_too_large`. |
+| `IRODORI_SERVER_REFERENCE_CACHE_MAX_ENTRIES` | `8` | Maximum in-memory encoded managed reference entries. Set `0` to disable the cache when memory is tight. |
 
 The checked-in [deployment/local.env.example](../deployment/local.env.example)
 contains the same operational knobs in copyable form. Keep the edited copy

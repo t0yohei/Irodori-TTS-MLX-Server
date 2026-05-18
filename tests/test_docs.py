@@ -131,6 +131,7 @@ def test_packaged_local_deployment_templates_stay_consistent() -> None:
         "IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS",
         "IRODORI_SERVER_VOICES_DIR",
         "IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES",
+        "IRODORI_SERVER_REFERENCE_CACHE_MAX_ENTRIES",
     ):
         assert required in environment
         assert required in env_example
