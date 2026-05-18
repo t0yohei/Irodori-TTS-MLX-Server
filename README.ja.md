@@ -4,8 +4,8 @@
 
 [Irodori-TTS-MLX](https://github.com/t0yohei/Irodori-TTS-MLX) を OpenAI 互換の
 `/v1/audio/speech` API から使うための、Apple Silicon / MLX 向けローカル TTS
-サーバーです。PyTorch / CUDA 版の upstream server をそのまま置き換えるものではなく、
-MLX ランタイムで安全に扱える範囲を明示して実装しています。
+サーバーです。PyTorch / CUDA 版の upstream server の全機能互換ではなく、
+Irodori-TTS-MLX で実装・検証済みの機能に絞った Apple Silicon 向けサーバーです。
 
 現在の公開 API は次の通りです。
 
