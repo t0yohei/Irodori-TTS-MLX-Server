@@ -597,7 +597,8 @@ class IrodoriMLXRuntimeManager:
         audio_chunks: list[bytes] = []
         for chunk_index, chunk in enumerate(chunks):
             chunk_irodori = dict(request.irodori)
-            chunk_irodori["seconds"] = chunk_seconds[chunk_index]
+            if "seconds" in chunk_irodori or chunk_seconds[chunk_index] is not None:
+                chunk_irodori["seconds"] = chunk_seconds[chunk_index]
             chunk_request = SpeechGenerationRequest(
                 model=request.model,
                 input=chunk,
@@ -770,12 +771,13 @@ class IrodoriMLXRuntimeManager:
         cfg_max_t = _required_float_option(options, "cfg_max_t", default=1.0, positive=False)
         if cfg_min_t > cfg_max_t:
             raise RuntimeRequestError("irodori.cfg_min_t must be <= irodori.cfg_max_t.")
+        seconds_explicit = "seconds" in options
         seconds = _float_option(options, "seconds", default=None)
         max_auto_seconds = None
         max_auto_estimate_seconds = None
         if (
             _string_option(options, "preset") == "ultra-fast"
-            and seconds is None
+            and not seconds_explicit
             and not duration_scale_explicit
             and request.speed == 1.0
         ):
