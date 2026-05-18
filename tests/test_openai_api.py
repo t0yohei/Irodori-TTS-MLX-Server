@@ -832,6 +832,103 @@ def test_managed_voice_resolution_accepts_upstream_no_ref_false_alias(tmp_path) 
     )
 
 
+def test_short_managed_voice_fast_preset_auto_selects_conservative_seconds(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "もう一度試しています。",
+            "voice": "sample",
+            "response_format": "wav",
+            "irodori": {"preset": "fast"},
+        },
+    )
+
+    assert response.status_code == 200
+    options = runtime.requests[-1].irodori
+    assert options["seconds"] == 1.68
+    assert options["preset"] == "fast"
+    assert_managed_reference_options(
+        options,
+        path=str(tmp_path / "sample.wav"),
+        voice_id="sample",
+    )
+
+
+def test_managed_voice_auto_seconds_preserves_explicit_seconds(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "もう一度試しています。",
+            "voice": "sample",
+            "response_format": "wav",
+            "seconds": 2.4,
+            "irodori": {"preset": "fast"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[-1].irodori["seconds"] == 2.4
+
+
+@pytest.mark.parametrize(
+    "input_text,irodori",
+    [
+        ("これは短文ですが品質プリセットなので自動秒数を使いません。", {"preset": "balanced"}),
+        ("長めの文章では過度な短縮で末尾が切れる可能性があるため自動秒数を使いません。" * 3, {"preset": "fast"}),
+        ("速度指定がある場合はduration_scaleとの二重制御を避けます。", {"preset": "fast", "duration_scale": 0.9}),
+    ],
+)
+def test_managed_voice_auto_seconds_gating_noops(tmp_path, input_text, irodori) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": input_text,
+            "voice": "sample",
+            "response_format": "wav",
+            "irodori": irodori,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "seconds" not in runtime.requests[-1].irodori
+
+
 @pytest.mark.parametrize(
     "payload_patch",
     [

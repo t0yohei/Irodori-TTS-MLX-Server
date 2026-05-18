@@ -33,6 +33,13 @@ from irodori_tts_mlx_server.voices import VoiceRegistry
 
 logger = logging.getLogger("irodori_tts_mlx_server.server")
 
+LATENCY_FOCUSED_PRESETS = {"ultra-fast", "fast"}
+AUTO_MANAGED_REFERENCE_SECONDS_MAX_CHARS = 40
+AUTO_MANAGED_REFERENCE_SECONDS_BASE = 0.8
+AUTO_MANAGED_REFERENCE_SECONDS_PER_CHAR = 0.08
+AUTO_MANAGED_REFERENCE_SECONDS_MIN = 1.2
+AUTO_MANAGED_REFERENCE_SECONDS_MAX = 3.0
+
 
 class ServerConfigurationError(Exception):
     def __init__(self, message: str) -> None:
@@ -518,6 +525,43 @@ def _runtime_voice_from_request(voice: str | dict[str, Any]) -> str:
     return _voice_id_from_request(voice) or ""
 
 
+def _apply_short_managed_reference_auto_seconds(
+    request: AudioSpeechRequest,
+    irodori_options: dict[str, Any],
+) -> dict[str, Any]:
+    if MANAGED_REFERENCE_CACHE_OPTION not in irodori_options:
+        return irodori_options
+    if "seconds" in irodori_options or "duration_scale" in irodori_options:
+        return irodori_options
+    if request.speed != 1.0:
+        return irodori_options
+    preset = irodori_options.get("preset")
+    if preset not in LATENCY_FOCUSED_PRESETS:
+        return irodori_options
+
+    text = request.input.strip()
+    if not text or len(text) > AUTO_MANAGED_REFERENCE_SECONDS_MAX_CHARS:
+        return irodori_options
+
+    estimated_seconds = AUTO_MANAGED_REFERENCE_SECONDS_BASE + (
+        len(text) * AUTO_MANAGED_REFERENCE_SECONDS_PER_CHAR
+    )
+    estimated_seconds = max(
+        AUTO_MANAGED_REFERENCE_SECONDS_MIN,
+        min(AUTO_MANAGED_REFERENCE_SECONDS_MAX, estimated_seconds),
+    )
+    updated_options = dict(irodori_options)
+    updated_options["seconds"] = round(estimated_seconds, 2)
+    logger.info(
+        "auto_managed_reference_seconds_applied voice=%s preset=%s chars=%s seconds=%.2f",
+        _runtime_voice_from_request(request.voice),
+        preset,
+        len(text),
+        updated_options["seconds"],
+    )
+    return updated_options
+
+
 def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None = None) -> FastAPI:
     speech_runtime = runtime if runtime is not None else create_default_runtime()
     server_configuration_error: ServerConfigurationError | None = None
@@ -788,7 +832,10 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                 param="response_format",
                 code=exc.code,
             ) from exc
-        irodori_options = _apply_managed_voice_reference(request, voice_registry)
+        irodori_options = _apply_short_managed_reference_auto_seconds(
+            request,
+            _apply_managed_voice_reference(request, voice_registry),
+        )
         generation_request = SpeechGenerationRequest(
             model=request.model,
             input=request.input,

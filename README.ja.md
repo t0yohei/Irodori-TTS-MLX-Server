@@ -123,6 +123,11 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 8, 12, 24, 40 sampling steps に対応します。`ultra-fast` は、`seconds` と
 `duration_scale` が未指定かつ `speed=1.0` の場合、対応する Irodori-TTS-MLX
 runtime に短文向け auto-duration cap も渡します。
+管理対象 reference voice の短文リクエストで `fast` または `ultra-fast` を使い、
+`seconds` と `duration_scale` を省略し `speed=1.0` のままにした場合、サーバーは
+保守的な文字数ベースの `seconds` 推定値を自動設定します。低遅延応答で明らかな
+過生成を避けるための挙動で、長文や明示的な duration 指定は末尾切れを避けるため
+変更しません。
 
 ## 管理対象 reference voice
 
