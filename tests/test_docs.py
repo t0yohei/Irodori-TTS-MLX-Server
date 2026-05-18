@@ -145,7 +145,7 @@ def test_packaged_local_deployment_templates_stay_consistent() -> None:
         "IRODORI_MLX_CODEC_ARTIFACT_REPO",
         "IRODORI_MLX_CODEC_PATH",
         "IRODORI_MLX_CODEC_DEVICE",
-        "IRODORI_MLX_CODEC_RUNTIME_MODE=persistent",
+        "IRODORI_MLX_CODEC_RUNTIME_MODE=mlx",
     ):
         assert required in env_example
 

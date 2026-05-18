@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import inspect
 import logging
 import os
 import tempfile
@@ -129,7 +128,7 @@ class IrodoriRuntimeConfig:
     codec_artifact_repo: str | None = DEFAULT_CODEC_ARTIFACT_REPO
     codec_artifact_revision: str | None = None
     codec_device: str = "cpu"
-    codec_runtime_mode: str = "persistent"
+    codec_runtime_mode: str = "mlx"
     enable_watermark: bool = False
     normalize_codec_audio: bool = True
     preload: bool = False
@@ -172,7 +171,7 @@ def runtime_config_from_env() -> IrodoriRuntimeConfig:
         or None,
         codec_artifact_revision=os.getenv("IRODORI_MLX_CODEC_ARTIFACT_REVISION") or None,
         codec_device=os.getenv("IRODORI_MLX_CODEC_DEVICE", "cpu"),
-        codec_runtime_mode=os.getenv("IRODORI_MLX_CODEC_RUNTIME_MODE", "persistent"),
+        codec_runtime_mode=os.getenv("IRODORI_MLX_CODEC_RUNTIME_MODE", "mlx"),
         enable_watermark=_env_bool("IRODORI_MLX_ENABLE_WATERMARK"),
         normalize_codec_audio=not _env_bool("IRODORI_MLX_DISABLE_CODEC_NORMALIZE"),
         preload=_env_bool("IRODORI_MLX_PRELOAD"),
@@ -219,32 +218,27 @@ def _import_runtime_modules() -> tuple[Any, Callable[..., Any], Callable[..., An
     )
 
 
-def _requires_codec_artifact(runtime_mode: str) -> bool:
-    return runtime_mode in MLX_CODEC_RUNTIME_MODES
-
-
 def _codec_bridge_config(
     runtime_module: Any,
     config: IrodoriRuntimeConfig,
     *,
     codec_path: str | None,
 ) -> Any:
+    if config.codec_runtime_mode not in MLX_CODEC_RUNTIME_MODES:
+        supported = ", ".join(sorted(MLX_CODEC_RUNTIME_MODES))
+        raise RuntimeUnavailableError(
+            f"Unsupported MLX codec runtime mode '{config.codec_runtime_mode}'. "
+            f"Supported modes: {supported}."
+        )
     codec_config_class = runtime_module.DACVAEBridgeConfig
     codec_kwargs: dict[str, Any] = {
         "codec_repo": config.codec_repo,
+        "codec_path": codec_path,
         "codec_device": config.codec_device,
         "runtime_mode": config.codec_runtime_mode,
         "enable_watermark": config.enable_watermark,
         "normalize_db": -16.0 if config.normalize_codec_audio else None,
     }
-    parameters = inspect.signature(codec_config_class).parameters
-    if "codec_path" in parameters:
-        codec_kwargs["codec_path"] = codec_path
-    elif codec_path is not None:
-        raise RuntimeUnavailableError(
-            "Installed Irodori-TTS-MLX runtime does not support IRODORI_MLX_CODEC_PATH. "
-            "Upgrade Irodori-TTS-MLX before using MLX DACVAE codec modes."
-        )
     return codec_config_class(**codec_kwargs)
 
 
@@ -712,16 +706,15 @@ class IrodoriMLXRuntimeManager:
         return factory(config=runtime_config)
 
     def _resolve_codec_path(self, resolve_codec_artifact_source: Callable[..., Any]) -> str | None:
-        if not _requires_codec_artifact(self.config.codec_runtime_mode):
-            self._resolved_codec_source = None
-            self._resolved_codec_source_kind = None
-            return None
         if self.config.codec_path:
             self._resolved_codec_source = self.config.codec_path
             self._resolved_codec_source_kind = "path"
             return self.config.codec_path
         if not self.config.codec_artifact_repo:
-            return None
+            raise RuntimeUnavailableError(
+                "Irodori-TTS-MLX requires an MLX DACVAE codec artifact. Set "
+                "IRODORI_MLX_CODEC_PATH or IRODORI_MLX_CODEC_ARTIFACT_REPO."
+            )
         try:
             layout = resolve_codec_artifact_source(
                 codec_artifact_repo=self.config.codec_artifact_repo,
@@ -730,7 +723,10 @@ class IrodoriMLXRuntimeManager:
         except ValueError as exc:
             raise RuntimeUnavailableError(f"Irodori-TTS-MLX codec artifact could not be loaded: {exc}") from exc
         if layout is None:
-            return None
+            raise RuntimeUnavailableError(
+                "Irodori-TTS-MLX codec artifact resolver returned no layout. Set "
+                "IRODORI_MLX_CODEC_PATH or IRODORI_MLX_CODEC_ARTIFACT_REPO."
+            )
         self._resolved_codec_source = getattr(layout, "source", self.config.codec_artifact_repo)
         self._resolved_codec_source_kind = getattr(layout, "source_kind", "repo")
         return str(layout.codec_path)

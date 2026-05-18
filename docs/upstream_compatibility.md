@@ -106,7 +106,7 @@ The post-MVP readiness work should treat these as the highest-value gaps:
 
 1. Complete the opt-in real MLX runtime smoke path with converted weights and
    record non-empty WAV/PCM evidence.
-2. Decide whether persistent voice/reference management belongs in this server
+2. Decide whether managed voice/reference storage belongs in this server
    or remains an upstream-only feature.
 3. Broaden compatibility regression coverage for representative OpenAI and
    upstream-style clients.

@@ -263,8 +263,8 @@ ruff check .
 ### Opt-in Real MLX Runtime Smoke
 
 Normal `pytest` runs do not require model weights, the Irodori-TTS-MLX runtime
-package, upstream Irodori-TTS, tokenizer assets, or codec artifacts. The real
-runtime smoke test is skipped unless explicitly enabled and configured.
+package, tokenizer assets, or codec artifacts. The real runtime smoke test is
+skipped unless explicitly enabled and configured.
 
 The shortest currently documented converted-weights source for VoiceDesign
 no-reference/caption smoke testing is the approved hosted layout
@@ -272,22 +272,19 @@ no-reference/caption smoke testing is the approved hosted layout
 Irodori-TTS-MLX's hosted weights usage guide. Equivalent local hosted layouts can
 be supplied with `IRODORI_MLX_WEIGHTS_DIR`.
 
-Install the server, development tools, Irodori-TTS-MLX runtime extras, and the
-upstream Irodori-TTS package in the same environment before running the smoke:
+Install the server, development tools, and Irodori-TTS-MLX runtime extras in the
+same environment before running the smoke:
 
 ```bash
 python -m pip install -e ".[dev]"
 python -m pip install -e /path/to/Irodori-TTS-MLX"[runtime]"
-python -m pip install -e /path/to/Irodori-TTS
 ```
 
 Run the opt-in pytest smoke with hosted converted VoiceDesign weights:
 
 ```bash
-PYTHONPATH=/path/to/Irodori-TTS:${PYTHONPATH:-} \
 IRODORI_REAL_MLX_SMOKE=1 \
 IRODORI_MLX_WEIGHTS_REPO=t0yohei/Irodori-TTS-MLX-500M-v2-VoiceDesign \
-IRODORI_MLX_CODEC_RUNTIME_MODE=persistent \
 pytest -m real_mlx tests/test_real_mlx_smoke.py
 ```
 
@@ -299,9 +296,7 @@ WAV audio with non-empty PCM frames.
 To validate through a running local server instead of pytest:
 
 ```bash
-PYTHONPATH=/path/to/Irodori-TTS:${PYTHONPATH:-} \
 IRODORI_MLX_WEIGHTS_REPO=t0yohei/Irodori-TTS-MLX-500M-v2-VoiceDesign \
-IRODORI_MLX_CODEC_RUNTIME_MODE=persistent \
 python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000
 
 curl http://127.0.0.1:8000/v1/audio/speech \
@@ -319,16 +314,9 @@ with open_wav(str(Path("/tmp/irodori-real-mlx-smoke.wav")), "rb") as wav_file:
 PY
 ```
 
-To exercise the hosted MLX DACVAE codec artifact, select an MLX codec mode:
-
-```bash
-IRODORI_MLX_CODEC_RUNTIME_MODE=mlx-decode \
-python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000
-```
-
 The default hosted codec artifact repo is
 `t0yohei/Irodori-TTS-MLX-DACVAE-Codec`. Set
 `IRODORI_MLX_CODEC_PATH=/path/to/semantic-dacvae-mlx.npz` only when testing a
-local override. Use `mlx-decode` when comparing synthesized speech without
-reference-audio encoding in the hot path. Use `mlx` only with a codec artifact
-that contains the runtime tensors needed for both MLX encode and decode.
+local override. The default codec runtime is `mlx`, which uses the MLX DACVAE
+artifact for both encode and decode when the runtime needs reference-audio
+conditioning.

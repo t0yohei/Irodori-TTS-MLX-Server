@@ -24,7 +24,7 @@
     <key>IRODORI_MLX_MODEL_ID</key>
     <string>irodori-tts-mlx</string>
     <key>IRODORI_MLX_CODEC_RUNTIME_MODE</key>
-    <string>persistent</string>
+    <string>mlx</string>
     <key>IRODORI_MLX_CODEC_ARTIFACT_REPO</key>
     <string>t0yohei/Irodori-TTS-MLX-DACVAE-Codec</string>
     <key>IRODORI_MLX_CODEC_PATH</key>
