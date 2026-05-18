@@ -318,3 +318,17 @@ with open_wav(str(Path("/tmp/irodori-real-mlx-smoke.wav")), "rb") as wav_file:
     assert wav_file.readframes(wav_file.getnframes())
 PY
 ```
+
+To exercise the hosted MLX DACVAE codec artifact, select an MLX codec mode:
+
+```bash
+IRODORI_MLX_CODEC_RUNTIME_MODE=mlx-decode \
+python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000
+```
+
+The default hosted codec artifact repo is
+`t0yohei/Irodori-TTS-MLX-DACVAE-Codec`. Set
+`IRODORI_MLX_CODEC_PATH=/path/to/semantic-dacvae-mlx.npz` only when testing a
+local override. Use `mlx-decode` when comparing synthesized speech without
+reference-audio encoding in the hot path. Use `mlx` only with a codec artifact
+that contains the runtime tensors needed for both MLX encode and decode.

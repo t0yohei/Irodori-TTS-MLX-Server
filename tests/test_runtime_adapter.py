@@ -54,6 +54,16 @@ class FakeRuntimeConfig:
 @dataclass(frozen=True)
 class FakeCodecConfig:
     codec_repo: str
+    codec_path: str | None
+    codec_device: str
+    runtime_mode: str
+    enable_watermark: bool
+    normalize_db: float | None
+
+
+@dataclass(frozen=True)
+class FakeLegacyCodecConfig:
+    codec_repo: str
     codec_device: str
     runtime_mode: str
     enable_watermark: bool
@@ -98,6 +108,14 @@ class ValueErrorMLXRuntime:
         raise ValueError("backend failed")
 
 
+def fake_codec_resolver(**_kwargs):
+    return SimpleNamespace(
+        codec_path="/resolved-codec/dacvae-codec.npz",
+        source="t0yohei/Irodori-TTS-MLX-DACVAE-Codec",
+        source_kind="repo",
+    )
+
+
 def fake_module_loader():
     runtime_module = SimpleNamespace(
         DACVAEBridgeConfig=FakeCodecConfig,
@@ -109,7 +127,13 @@ def fake_module_loader():
         weights_path="/weights/model.npz",
         model_config={"family": "voicedesign"},
     )
-    return runtime_module, lambda **_kwargs: layout
+    return runtime_module, lambda **_kwargs: layout, fake_codec_resolver
+
+
+def fake_legacy_codec_module_loader():
+    runtime_module, resolver, codec_resolver = fake_module_loader()
+    runtime_module.DACVAEBridgeConfig = FakeLegacyCodecConfig
+    return runtime_module, resolver, codec_resolver
 
 
 def hosted_config(**kwargs) -> IrodoriRuntimeConfig:
@@ -145,7 +169,9 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
             caption_tokenizer_repo="caption-tokenizer",
             text_max_length=128,
             caption_max_length=64,
+            codec_path="/codec/semantic-dacvae-mlx.npz",
             codec_device="cpu",
+            codec_runtime_mode="mlx-decode",
         ),
         module_loader=fake_module_loader,
     )
@@ -185,6 +211,14 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
     assert runtime.config.caption_tokenizer_repo == "caption-tokenizer"
     assert runtime.config.text_max_length == 128
     assert runtime.config.caption_max_length == 64
+    assert runtime.config.codec == FakeCodecConfig(
+        codec_repo="Aratako/Semantic-DACVAE-Japanese-32dim",
+        codec_path="/codec/semantic-dacvae-mlx.npz",
+        codec_device="cpu",
+        runtime_mode="mlx-decode",
+        enable_watermark=False,
+        normalize_db=-16.0,
+    )
     assert runtime.requests[0] == FakeGenerationRequest(
         text="hello",
         output_wav=runtime.requests[0].output_wav,
@@ -547,13 +581,13 @@ def test_mlx_runtime_manager_uses_hosted_weights_layout() -> None:
     )
 
     def module_loader():
-        runtime_module, _resolver = fake_module_loader()
+        runtime_module, _resolver, codec_resolver = fake_module_loader()
 
         def resolve_weights_layout_source(**kwargs):
             calls.append(kwargs)
             return layout
 
-        return runtime_module, resolve_weights_layout_source
+        return runtime_module, resolve_weights_layout_source, codec_resolver
 
     manager = IrodoriMLXRuntimeManager(
         IrodoriRuntimeConfig(weights_repo="owner/repo", weights_revision="main"),
@@ -573,6 +607,151 @@ def test_mlx_runtime_manager_uses_hosted_weights_layout() -> None:
     assert calls == [{"weights_dir": None, "weights_repo": "owner/repo", "revision": "main"}]
     assert FakeMLXRuntime.instances[-1].config.weights_path == "/layout/model.npz"
     assert FakeMLXRuntime.instances[-1].config.model_config == {"family": "voicedesign"}
+
+
+def test_mlx_runtime_manager_resolves_default_hosted_codec_repo_for_mlx_mode() -> None:
+    FakeMLXRuntime.instances.clear()
+    calls = []
+
+    def module_loader():
+        runtime_module, resolver, _codec_resolver = fake_module_loader()
+
+        def resolve_codec_artifact_source(**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                codec_path="/hf-cache/dacvae-codec.npz",
+                source="t0yohei/Irodori-TTS-MLX-DACVAE-Codec",
+                source_kind="repo",
+            )
+
+        return runtime_module, resolver, resolve_codec_artifact_source
+
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(codec_runtime_mode="mlx-decode"),
+        module_loader=module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="alloy",
+            response_format="wav",
+            speed=1.0,
+        )
+    )
+
+    assert calls == [
+        {
+            "codec_artifact_repo": "t0yohei/Irodori-TTS-MLX-DACVAE-Codec",
+            "revision": None,
+        }
+    ]
+    assert FakeMLXRuntime.instances[-1].config.codec.codec_path == "/hf-cache/dacvae-codec.npz"
+    assert manager.status_metadata()["codec_artifact_source"] == (
+        "t0yohei/Irodori-TTS-MLX-DACVAE-Codec"
+    )
+    assert manager.status_metadata()["codec_artifact_source_kind"] == "repo"
+
+
+def test_mlx_runtime_manager_prefers_explicit_codec_path_over_hosted_codec_repo() -> None:
+    FakeMLXRuntime.instances.clear()
+    calls = []
+
+    def module_loader():
+        runtime_module, resolver, _codec_resolver = fake_module_loader()
+
+        def resolve_codec_artifact_source(**kwargs):
+            calls.append(kwargs)
+            return fake_codec_resolver(**kwargs)
+
+        return runtime_module, resolver, resolve_codec_artifact_source
+
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(codec_path="/codec/local.npz", codec_runtime_mode="mlx-decode"),
+        module_loader=module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="alloy",
+            response_format="wav",
+            speed=1.0,
+        )
+    )
+
+    assert calls == []
+    assert FakeMLXRuntime.instances[-1].config.codec.codec_path == "/codec/local.npz"
+    assert manager.status_metadata()["codec_artifact_source"] == "/codec/local.npz"
+    assert manager.status_metadata()["codec_artifact_source_kind"] == "path"
+
+
+def test_mlx_runtime_manager_ignores_codec_path_for_persistent_mode() -> None:
+    FakeMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(codec_path="/codec/local.npz", codec_runtime_mode="persistent"),
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="alloy",
+            response_format="wav",
+            speed=1.0,
+        )
+    )
+
+    assert FakeMLXRuntime.instances[-1].config.codec.codec_path is None
+    assert manager.status_metadata()["codec_artifact_source"] is None
+    assert manager.status_metadata()["codec_artifact_source_kind"] is None
+
+
+def test_mlx_runtime_manager_keeps_legacy_codec_bridge_compatible_without_codec_path() -> None:
+    FakeMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=fake_legacy_codec_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="alloy",
+            response_format="wav",
+            speed=1.0,
+        )
+    )
+
+    assert FakeMLXRuntime.instances[-1].config.codec == FakeLegacyCodecConfig(
+        codec_repo="Aratako/Semantic-DACVAE-Japanese-32dim",
+        codec_device="cpu",
+        runtime_mode="persistent",
+        enable_watermark=False,
+        normalize_db=-16.0,
+    )
+
+
+def test_mlx_runtime_manager_rejects_codec_path_when_runtime_lacks_support() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(codec_path="/codec/semantic-dacvae-mlx.npz", codec_runtime_mode="mlx-decode"),
+        module_loader=fake_legacy_codec_module_loader,
+    )
+
+    with pytest.raises(RuntimeUnavailableError, match="does not support IRODORI_MLX_CODEC_PATH"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="alloy",
+                response_format="wav",
+                speed=1.0,
+            )
+        )
 
 
 def test_mlx_runtime_manager_rejects_conflicting_reference_options() -> None:
@@ -773,3 +952,26 @@ def test_mlx_runtime_manager_reports_loading_and_failed_states() -> None:
     assert failed_status["loaded"] is False
     assert failed_status["load_state"] == "failed"
     assert failed_status["last_load_error"] == "load failed"
+
+
+def test_mlx_runtime_manager_status_reports_codec_configuration() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(codec_path="/codec/semantic-dacvae-mlx.npz", codec_runtime_mode="mlx"),
+        module_loader=fake_module_loader,
+    )
+
+    assert manager.status_metadata() == {
+        "runtime": "irodori-tts-mlx",
+        "configured": True,
+        "loaded": False,
+        "load_state": "not_loaded",
+        "model_id": "irodori-tts-mlx",
+        "weights_source": "weights_repo",
+        "codec_path_configured": True,
+        "codec_artifact_repo": "t0yohei/Irodori-TTS-MLX-DACVAE-Codec",
+        "codec_artifact_revision": None,
+        "codec_artifact_source": None,
+        "codec_artifact_source_kind": None,
+        "codec_runtime_mode": "mlx",
+        "last_load_error": None,
+    }
