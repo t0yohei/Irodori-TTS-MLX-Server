@@ -61,6 +61,15 @@ class FakeCodecConfig:
     normalize_db: float | None
 
 
+@dataclass(frozen=True)
+class FakeUnsupportedCodecConfig:
+    codec_repo: str
+    codec_device: str
+    runtime_mode: str
+    enable_watermark: bool
+    normalize_db: float | None
+
+
 class FakeMLXRuntime:
     instances: list["FakeMLXRuntime"] = []
 
@@ -119,6 +128,12 @@ def fake_module_loader():
         model_config={"family": "voicedesign"},
     )
     return runtime_module, lambda **_kwargs: layout, fake_codec_resolver
+
+
+def fake_unsupported_codec_module_loader():
+    runtime_module, resolver, codec_resolver = fake_module_loader()
+    runtime_module.DACVAEBridgeConfig = FakeUnsupportedCodecConfig
+    return runtime_module, resolver, codec_resolver
 
 
 def hosted_config(**kwargs) -> IrodoriRuntimeConfig:
@@ -704,6 +719,24 @@ def test_mlx_runtime_manager_rejects_non_mlx_codec_runtime_mode() -> None:
     )
 
     with pytest.raises(RuntimeUnavailableError, match="Unsupported MLX codec runtime mode"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="alloy",
+                response_format="wav",
+                speed=1.0,
+            )
+        )
+
+
+def test_mlx_runtime_manager_rejects_runtime_without_mlx_codec_artifact_support() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=fake_unsupported_codec_module_loader,
+    )
+
+    with pytest.raises(RuntimeUnavailableError, match="does not support MLX DACVAE codec"):
         manager.generate_speech(
             SpeechGenerationRequest(
                 model="irodori-tts-mlx",

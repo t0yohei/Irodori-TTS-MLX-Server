@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 import os
 import tempfile
@@ -231,6 +232,12 @@ def _codec_bridge_config(
             f"Supported modes: {supported}."
         )
     codec_config_class = runtime_module.DACVAEBridgeConfig
+    parameters = inspect.signature(codec_config_class).parameters
+    if "codec_path" not in parameters:
+        raise RuntimeUnavailableError(
+            "Installed Irodori-TTS-MLX runtime does not support MLX DACVAE codec "
+            "artifacts. Upgrade Irodori-TTS-MLX before using this server."
+        )
     codec_kwargs: dict[str, Any] = {
         "codec_repo": config.codec_repo,
         "codec_path": codec_path,
