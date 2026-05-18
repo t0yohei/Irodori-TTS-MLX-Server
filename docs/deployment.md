@@ -59,8 +59,11 @@ Optional runtime and server controls:
 | `IRODORI_MLX_TEXT_MAX_LENGTH` | `256` | Default long-text chunk size used by runtime request mapping. |
 | `IRODORI_MLX_CAPTION_MAX_LENGTH` | runtime default | Optional caption-token limit. |
 | `IRODORI_MLX_CODEC_REPO` | `Aratako/Semantic-DACVAE-Japanese-32dim` | Codec repository used by the Irodori-TTS-MLX runtime. |
+| `IRODORI_MLX_CODEC_ARTIFACT_REPO` | `t0yohei/Irodori-TTS-MLX-DACVAE-Codec` | Hosted MLX DACVAE codec artifact repo used by `mlx` and `mlx-decode` when `IRODORI_MLX_CODEC_PATH` is unset. |
+| `IRODORI_MLX_CODEC_ARTIFACT_REVISION` | provider default | Optional revision for the hosted codec artifact repo. |
+| `IRODORI_MLX_CODEC_PATH` | unset | Optional local MLX DACVAE codec artifact path. Overrides the hosted codec artifact repo. |
 | `IRODORI_MLX_CODEC_DEVICE` | `cpu` | Keep on `cpu` unless the runtime has validated another device for this host. |
-| `IRODORI_MLX_CODEC_RUNTIME_MODE` | `persistent` | Keeps codec startup cost out of repeated requests. |
+| `IRODORI_MLX_CODEC_RUNTIME_MODE` | `persistent` | `persistent` uses the upstream PyTorch codec bridge. `mlx-decode` uses MLX DACVAE decode with the reference encoder fallback. `mlx` uses the MLX DACVAE artifact for both sides when the artifact supports it. |
 | `IRODORI_MLX_ENABLE_WATERMARK` | unset / false | Enables runtime watermarking when supported by the runtime. |
 | `IRODORI_MLX_DISABLE_CODEC_NORMALIZE` | unset / false | Disables codec audio normalization. |
 | `IRODORI_SERVER_BEARER_TOKEN` | unset | Enables bearer-token auth for `/v1/*` routes. Prefer a secret manager or macOS Keychain lookup over a checked-in `.env`. |

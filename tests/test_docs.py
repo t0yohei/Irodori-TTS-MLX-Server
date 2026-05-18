@@ -124,6 +124,8 @@ def test_packaged_local_deployment_templates_stay_consistent() -> None:
         "IRODORI_MLX_WEIGHTS_DIR",
         "IRODORI_MLX_PRELOAD",
         "IRODORI_MLX_MODEL_ID",
+        "IRODORI_MLX_CODEC_ARTIFACT_REPO",
+        "IRODORI_MLX_CODEC_PATH",
         "IRODORI_MLX_CODEC_RUNTIME_MODE",
         "IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS",
         "IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS",
@@ -140,6 +142,8 @@ def test_packaged_local_deployment_templates_stay_consistent() -> None:
     for required in (
         "IRODORI_SERVER_BEARER_TOKEN",
         "IRODORI_API_KEY",
+        "IRODORI_MLX_CODEC_ARTIFACT_REPO",
+        "IRODORI_MLX_CODEC_PATH",
         "IRODORI_MLX_CODEC_DEVICE",
         "IRODORI_MLX_CODEC_RUNTIME_MODE=persistent",
     ):

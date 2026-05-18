@@ -25,6 +25,10 @@
     <string>irodori-tts-mlx</string>
     <key>IRODORI_MLX_CODEC_RUNTIME_MODE</key>
     <string>persistent</string>
+    <key>IRODORI_MLX_CODEC_ARTIFACT_REPO</key>
+    <string>t0yohei/Irodori-TTS-MLX-DACVAE-Codec</string>
+    <key>IRODORI_MLX_CODEC_PATH</key>
+    <string></string>
     <key>IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS</key>
     <string>1</string>
     <key>IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS</key>

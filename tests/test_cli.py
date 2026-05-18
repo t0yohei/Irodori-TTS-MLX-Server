@@ -129,3 +129,33 @@ def test_cli_rejects_conflicting_weight_sources() -> None:
         main_module.main(["--weights-dir", "/weights/layout", "--weights-repo", "owner/repo"])
 
     assert exc_info.value.code == 2
+
+
+def test_runtime_config_from_env_reads_codec_path_and_mode(monkeypatch) -> None:
+    monkeypatch.setenv("IRODORI_MLX_WEIGHTS_REPO", "owner/repo")
+    monkeypatch.setenv("IRODORI_MLX_CODEC_PATH", "/codec/semantic-dacvae-mlx.npz")
+    monkeypatch.setenv("IRODORI_MLX_CODEC_ARTIFACT_REPO", "owner/codec")
+    monkeypatch.setenv("IRODORI_MLX_CODEC_ARTIFACT_REVISION", "abc123")
+    monkeypatch.setenv("IRODORI_MLX_CODEC_RUNTIME_MODE", "mlx-decode")
+
+    config = runtime_config_from_env()
+
+    assert config.weights_repo == "owner/repo"
+    assert config.codec_path == "/codec/semantic-dacvae-mlx.npz"
+    assert config.codec_artifact_repo == "owner/codec"
+    assert config.codec_artifact_revision == "abc123"
+    assert config.codec_runtime_mode == "mlx-decode"
+
+
+def test_runtime_config_from_env_ignores_empty_codec_path(monkeypatch) -> None:
+    monkeypatch.setenv("IRODORI_MLX_CODEC_PATH", "")
+
+    assert runtime_config_from_env().codec_path is None
+
+
+def test_runtime_config_from_env_defaults_hosted_codec_artifact_repo(monkeypatch) -> None:
+    monkeypatch.delenv("IRODORI_MLX_CODEC_ARTIFACT_REPO", raising=False)
+
+    assert runtime_config_from_env().codec_artifact_repo == (
+        "t0yohei/Irodori-TTS-MLX-DACVAE-Codec"
+    )
