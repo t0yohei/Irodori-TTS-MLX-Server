@@ -119,6 +119,10 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 `duration_scale`, `num_steps`, `seed`, `chunking`, `chunk_max_chars`,
 `tail_trim_ms`, `tail_silence_trim_ms` です。OpenAI の `speed` は
 `duration_scale` 未指定時に `duration_scale=1/speed` として扱います。
+`preset` は `ultra-fast`, `fast`, `balanced`, `quality` を受け付け、それぞれ
+8, 12, 24, 40 sampling steps に対応します。`ultra-fast` は、`seconds` と
+`duration_scale` が未指定かつ `speed=1.0` の場合、対応する Irodori-TTS-MLX
+runtime に短文向け auto-duration cap も渡します。
 
 ## 管理対象 reference voice
 
