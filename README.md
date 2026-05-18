@@ -41,8 +41,7 @@ Choose the upstream server when you want the PyTorch v3 base model, CUDA-oriente
 deployment, Docker Compose setup, broad voice-file and alias APIs, automatic
 long-text chunking, queue controls, optional auth, or multiple encoded response formats.
 Choose this server when you specifically want to exercise Irodori-TTS-MLX on
-Apple Silicon and can provide converted MLX weights plus the matching model
-configuration.
+Apple Silicon and can provide a hosted converted-weights layout.
 
 The current MLX server MVP does not claim parity with the upstream server. The
 initial surface supports the OpenAI-compatible model list and speech endpoint,
@@ -101,7 +100,7 @@ guidance covering Apple Silicon host assumptions, bearer auth, queue controls,
 health checks, logs, and the packaged launchd templates under
 [deployment/](deployment/).
 
-Configure the real MLX runtime with either a hosted converted-weights layout:
+Configure the real MLX runtime with a hosted converted-weights layout:
 
 ```bash
 python -m irodori_tts_mlx_server \
@@ -110,17 +109,8 @@ python -m irodori_tts_mlx_server \
   --port 8000
 ```
 
-or local converted weights plus the matching model config:
-
-```bash
-python -m irodori_tts_mlx_server \
-  --weights /path/to/irodori-tts-mlx.npz \
-  --model-config-json /path/to/model_config.json
-```
-
 The same settings can be supplied through environment variables:
-`IRODORI_MLX_WEIGHTS_REPO`, `IRODORI_MLX_WEIGHTS_DIR`,
-`IRODORI_MLX_WEIGHTS_PATH`, and `IRODORI_MLX_MODEL_CONFIG_JSON`.
+`IRODORI_MLX_WEIGHTS_REPO` or `IRODORI_MLX_WEIGHTS_DIR`.
 `IRODORI_MLX_PRELOAD=1` loads the model during startup; otherwise loading is
 lazy on the first speech request. `/health` reports `speech_runtime.load_state`
 as `unconfigured`, `not_loaded`, `loading`, `loaded`, or `failed` without
@@ -280,8 +270,7 @@ The shortest currently documented converted-weights source for VoiceDesign
 no-reference/caption smoke testing is the approved hosted layout
 `t0yohei/Irodori-TTS-MLX-500M-v2-VoiceDesign`, as documented by
 Irodori-TTS-MLX's hosted weights usage guide. Equivalent local hosted layouts can
-be supplied with `IRODORI_MLX_WEIGHTS_DIR`, or direct converted `.npz` weights
-with `IRODORI_MLX_WEIGHTS_PATH` plus `IRODORI_MLX_MODEL_CONFIG_JSON`.
+be supplied with `IRODORI_MLX_WEIGHTS_DIR`.
 
 Install the server, development tools, Irodori-TTS-MLX runtime extras, and the
 upstream Irodori-TTS package in the same environment before running the smoke:

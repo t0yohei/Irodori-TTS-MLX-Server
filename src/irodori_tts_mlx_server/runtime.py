@@ -80,9 +80,8 @@ class UnconfiguredSpeechRuntime:
 
     def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
         raise RuntimeUnavailableError(
-            "Irodori-TTS-MLX runtime is not configured. Set IRODORI_MLX_WEIGHTS_PATH "
-            "with IRODORI_MLX_MODEL_CONFIG_JSON, or set IRODORI_MLX_WEIGHTS_DIR / "
-            "IRODORI_MLX_WEIGHTS_REPO for a hosted converted weights layout."
+            "Irodori-TTS-MLX runtime is not configured. Set IRODORI_MLX_WEIGHTS_DIR "
+            "or IRODORI_MLX_WEIGHTS_REPO for a hosted converted weights layout."
         )
 
 
@@ -115,8 +114,6 @@ class IrodoriRuntimeConfig:
     """Configuration for the real Irodori-TTS-MLX runtime adapter."""
 
     model_id: str = "irodori-tts-mlx"
-    weights_path: str | None = None
-    model_config_json: str | None = None
     weights_dir: str | None = None
     weights_repo: str | None = None
     weights_revision: str | None = None
@@ -133,7 +130,7 @@ class IrodoriRuntimeConfig:
 
     @property
     def configured(self) -> bool:
-        return bool(self.weights_path or self.weights_dir or self.weights_repo)
+        return bool(self.weights_dir or self.weights_repo)
 
 
 def _env_bool(name: str, *, default: bool = False) -> bool:
@@ -156,8 +153,6 @@ def _env_int(name: str, *, default: int | None = None) -> int | None:
 def runtime_config_from_env() -> IrodoriRuntimeConfig:
     return IrodoriRuntimeConfig(
         model_id=os.getenv("IRODORI_MLX_MODEL_ID", "irodori-tts-mlx"),
-        weights_path=os.getenv("IRODORI_MLX_WEIGHTS_PATH"),
-        model_config_json=os.getenv("IRODORI_MLX_MODEL_CONFIG_JSON"),
         weights_dir=os.getenv("IRODORI_MLX_WEIGHTS_DIR"),
         weights_repo=os.getenv("IRODORI_MLX_WEIGHTS_REPO"),
         weights_revision=os.getenv("IRODORI_MLX_WEIGHTS_REVISION"),
@@ -497,11 +492,9 @@ class IrodoriMLXRuntimeManager:
         return [self.config.model_id]
 
     def status_metadata(self) -> dict[str, Any]:
-        source = "weights_path"
+        source = "weights_dir"
         if self.config.weights_repo:
             source = "weights_repo"
-        elif self.config.weights_dir:
-            source = "weights_dir"
         return {
             "runtime": "irodori-tts-mlx",
             "configured": self.config.configured,
@@ -631,21 +624,13 @@ class IrodoriMLXRuntimeManager:
             weights_repo=self.config.weights_repo,
             revision=self.config.weights_revision,
         )
-        if layout is not None:
-            weights_path = str(layout.weights_path)
-            model_config = layout.model_config
-        else:
-            if not self.config.weights_path:
-                raise RuntimeUnavailableError(
-                    "No MLX weights are configured. Set IRODORI_MLX_WEIGHTS_PATH, "
-                    "IRODORI_MLX_WEIGHTS_DIR, or IRODORI_MLX_WEIGHTS_REPO."
-                )
-            if not self.config.model_config_json:
-                raise RuntimeUnavailableError(
-                    "IRODORI_MLX_MODEL_CONFIG_JSON is required when using IRODORI_MLX_WEIGHTS_PATH."
-                )
-            weights_path = self.config.weights_path
-            model_config = runtime_module.load_model_config_json(self.config.model_config_json)
+        if layout is None:
+            raise RuntimeUnavailableError(
+                "No hosted MLX weights layout is configured. Set IRODORI_MLX_WEIGHTS_DIR "
+                "or IRODORI_MLX_WEIGHTS_REPO."
+            )
+        weights_path = str(layout.weights_path)
+        model_config = layout.model_config
 
         runtime_config = runtime_module.MLXRuntimeConfig(
             model_config=model_config,

@@ -126,6 +126,6 @@ def test_cli_rejects_conflicting_weight_sources() -> None:
     main_module = importlib.import_module("irodori_tts_mlx_server.__main__")
 
     with pytest.raises(SystemExit) as exc_info:
-        main_module.main(["--weights", "/weights/model.npz", "--weights-repo", "owner/repo"])
+        main_module.main(["--weights-dir", "/weights/layout", "--weights-repo", "owner/repo"])
 
     assert exc_info.value.code == 2

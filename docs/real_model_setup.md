@@ -33,7 +33,6 @@ Use exactly one of these source modes.
 | --- | --- | --- | --- |
 | Hosted converted weights repo | `--weights-repo owner/repo` | `IRODORI_MLX_WEIGHTS_REPO=owner/repo` | A Hugging Face repository already follows the converted-weights layout and is approved for your use. |
 | Local converted-weights layout directory | `--weights-dir /models/irodori-layout` | `IRODORI_MLX_WEIGHTS_DIR=/models/irodori-layout` | You have the same hosted layout on disk, commonly for private staging or offline use. |
-| Direct converted `.npz` file plus config | `--weights /models/weights.npz --model-config-json /models/model_config.json` | `IRODORI_MLX_WEIGHTS_PATH=/models/weights.npz` and `IRODORI_MLX_MODEL_CONFIG_JSON=/models/model_config.json` | You converted weights locally and want the smallest explicit file-based setup. |
 
 `IRODORI_MLX_WEIGHTS_REVISION` or `--weights-revision` may be supplied with a
 hosted repository to pin a branch, tag, or commit. `IRODORI_MLX_PRELOAD=1` or
@@ -75,10 +74,6 @@ duration-predictor configuration. `tokenizer_config.json` and
 `conversion_metadata.json` should preserve the tokenizer/conditioning contract
 and conversion provenance.
 
-When using `IRODORI_MLX_WEIGHTS_PATH`, the hosted manifest is not required, but
-`IRODORI_MLX_MODEL_CONFIG_JSON` is required because the server needs the matching
-runtime config for the direct `.npz` file.
-
 ## Minimal Local Run
 
 Hosted or local-layout source:
@@ -89,24 +84,6 @@ IRODORI_MLX_WEIGHTS_REVISION=main \
 python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000
 ```
 
-Direct local conversion source:
-
-```bash
-IRODORI_MLX_WEIGHTS_PATH=/models/irodori/weights.npz \
-IRODORI_MLX_MODEL_CONFIG_JSON=/models/irodori/model_config.json \
-python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000
-```
-
-The equivalent CLI flags are:
-
-```bash
-python -m irodori_tts_mlx_server \
-  --weights /models/irodori/weights.npz \
-  --model-config-json /models/irodori/model_config.json \
-  --host 127.0.0.1 \
-  --port 8000
-```
-
 Check runtime status without forcing a load:
 
 ```bash
@@ -114,8 +91,8 @@ curl http://127.0.0.1:8000/health
 ```
 
 A configured but not yet loaded runtime reports `configured: true`,
-`loaded: false`, and a `weights_source` such as `weights_repo`, `weights_dir`, or
-`weights_path`. If `IRODORI_MLX_PRELOAD=1` is set, startup attempts the model
+`loaded: false`, and a `weights_source` such as `weights_repo` or `weights_dir`.
+If `IRODORI_MLX_PRELOAD=1` is set, startup attempts the model
 load immediately and reports any load error through `/health`.
 
 ## Minimal Speech Request
@@ -169,8 +146,7 @@ Common setup failures:
 
 | Symptom | Status | Error code | Expected fix |
 | --- | --- | --- | --- |
-| No weights source is configured. | 503 | `runtime_unavailable` | Set one of `IRODORI_MLX_WEIGHTS_REPO`, `IRODORI_MLX_WEIGHTS_DIR`, or `IRODORI_MLX_WEIGHTS_PATH` plus `IRODORI_MLX_MODEL_CONFIG_JSON`. |
-| `IRODORI_MLX_WEIGHTS_PATH` is set without `IRODORI_MLX_MODEL_CONFIG_JSON`. | 503 | `runtime_unavailable` | Provide the matching `model_config.json` for the converted `.npz`. |
+| No weights source is configured. | 503 | `runtime_unavailable` | Set `IRODORI_MLX_WEIGHTS_REPO` or `IRODORI_MLX_WEIGHTS_DIR`. |
 | Irodori-TTS-MLX runtime imports fail. | 503 | `runtime_unavailable` | Install Irodori-TTS-MLX and its runtime dependencies in the server venv. |
 | Hosted repo or local layout is missing required files or fails validation. | 503 | `runtime_unavailable` | Use a layout with manifest, config, tokenizer metadata, conversion metadata, weights, and checksums matching the Irodori-TTS-MLX layout contract. |
 | `IRODORI_MLX_TEXT_MAX_LENGTH` or `IRODORI_MLX_CAPTION_MAX_LENGTH` is not an integer. | 503 | `runtime_unavailable` | Use an integer value or unset it. |

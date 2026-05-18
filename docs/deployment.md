@@ -36,8 +36,8 @@ exec python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000
 
 Use `IRODORI_MLX_WEIGHTS_REPO` with `IRODORI_MLX_WEIGHTS_REVISION` when the
 converted weights live in an approved hosted repository, or
-`IRODORI_MLX_WEIGHTS_PATH` with `IRODORI_MLX_MODEL_CONFIG_JSON` for a direct
-local `.npz` file. See [real_model_setup.md](real_model_setup.md) for the full
+`IRODORI_MLX_WEIGHTS_DIR` for a local copy of the same hosted layout. See
+[real_model_setup.md](real_model_setup.md) for the full
 artifact layout contract and speech smoke command.
 
 ## Environment Variables
@@ -48,8 +48,6 @@ Required for real synthesis, choose exactly one weight source:
 | --- | --- | --- |
 | `IRODORI_MLX_WEIGHTS_REPO` | Hosted converted weights | Repository id such as `owner/repo`. Pin `IRODORI_MLX_WEIGHTS_REVISION` for repeatable deployments. |
 | `IRODORI_MLX_WEIGHTS_DIR` | Local hosted-layout directory | Directory containing `irodori_mlx_manifest.json`, `model_config.json`, tokenizer metadata, converted weights, and checksums. |
-| `IRODORI_MLX_WEIGHTS_PATH` | Direct file source | Path to converted `weights.npz`; requires `IRODORI_MLX_MODEL_CONFIG_JSON`. |
-| `IRODORI_MLX_MODEL_CONFIG_JSON` | Direct file source | Matching config for `IRODORI_MLX_WEIGHTS_PATH`. |
 
 Optional runtime and server controls:
 
