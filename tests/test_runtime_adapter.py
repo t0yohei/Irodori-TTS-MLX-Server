@@ -104,9 +104,16 @@ def fake_module_loader():
         GenerationRequest=FakeGenerationRequest,
         MLXDACVAERuntime=FakeMLXRuntime,
         MLXRuntimeConfig=FakeRuntimeConfig,
-        load_model_config_json=lambda path: {"model_config_path": path},
     )
-    return runtime_module, lambda **_kwargs: None
+    layout = SimpleNamespace(
+        weights_path="/weights/model.npz",
+        model_config={"family": "voicedesign"},
+    )
+    return runtime_module, lambda **_kwargs: layout
+
+
+def hosted_config(**kwargs) -> IrodoriRuntimeConfig:
+    return IrodoriRuntimeConfig(weights_repo="owner/repo", **kwargs)
 
 
 def make_wav(samples: list[int], *, framerate: int = 1000) -> bytes:
@@ -133,9 +140,7 @@ def read_wav_samples(audio: bytes) -> list[int]:
 def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
     FakeMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz",
-            model_config_json="/weights/model_config.json",
+        hosted_config(
             text_tokenizer_repo="text-tokenizer",
             caption_tokenizer_repo="caption-tokenizer",
             text_max_length=128,
@@ -204,9 +209,7 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
 def test_mlx_runtime_manager_maps_voicedesign_preset_to_runtime_steps() -> None:
     FakeMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -237,9 +240,7 @@ def test_mlx_runtime_manager_maps_voicedesign_preset_to_runtime_steps() -> None:
 def test_mlx_runtime_manager_lets_explicit_num_steps_override_preset() -> None:
     FakeMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -260,9 +261,7 @@ def test_mlx_runtime_manager_lets_explicit_num_steps_override_preset() -> None:
 def test_mlx_runtime_manager_ignores_empty_lora_adapter_option() -> None:
     FakeMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -289,9 +288,7 @@ def test_mlx_runtime_manager_rejects_lora_adapter_alias_until_runtime_supports_i
         return fake_module_loader()
 
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=module_loader,
     )
 
@@ -311,9 +308,7 @@ def test_mlx_runtime_manager_rejects_lora_adapter_alias_until_runtime_supports_i
 
 def test_mlx_runtime_manager_rejects_path_like_lora_adapter_values() -> None:
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -332,9 +327,7 @@ def test_mlx_runtime_manager_rejects_path_like_lora_adapter_values() -> None:
 
 def test_mlx_runtime_manager_rejects_non_string_lora_adapter_values() -> None:
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -393,9 +386,7 @@ def test_split_text_for_generation_falls_back_to_hard_slices() -> None:
 def test_mlx_runtime_manager_chunks_long_text_and_concatenates_wav_output() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz",
-            model_config_json="/weights/model_config.json",
+        hosted_config(
             text_max_length=8,
         ),
         runtime_factory=WaveMLXRuntime,
@@ -422,9 +413,7 @@ def test_mlx_runtime_manager_chunks_long_text_and_concatenates_wav_output() -> N
 def test_mlx_runtime_manager_distributes_explicit_seconds_across_chunks() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz",
-            model_config_json="/weights/model_config.json",
+        hosted_config(
             text_max_length=5,
         ),
         runtime_factory=WaveMLXRuntime,
@@ -449,9 +438,7 @@ def test_mlx_runtime_manager_distributes_explicit_seconds_across_chunks() -> Non
 def test_mlx_runtime_manager_can_disable_chunking() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz",
-            model_config_json="/weights/model_config.json",
+        hosted_config(
             text_max_length=5,
         ),
         runtime_factory=WaveMLXRuntime,
@@ -475,9 +462,7 @@ def test_mlx_runtime_manager_can_disable_chunking() -> None:
 def test_mlx_runtime_manager_applies_tail_artifact_controls_per_chunk() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz",
-            model_config_json="/weights/model_config.json",
+        hosted_config(
             text_max_length=5,
         ),
         runtime_factory=WaveMLXRuntime,
@@ -512,9 +497,7 @@ def test_concatenate_wav_audio_maps_empty_wav_bytes_to_runtime_unavailable() -> 
 def test_mlx_runtime_manager_synchronizes_lazy_runtime_initialization() -> None:
     FakeMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -540,9 +523,7 @@ def test_mlx_runtime_manager_synchronizes_lazy_runtime_initialization() -> None:
 
 def test_mlx_runtime_manager_treats_backend_value_error_as_unavailable() -> None:
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         runtime_factory=ValueErrorMLXRuntime,
         module_loader=fake_module_loader,
     )
@@ -596,9 +577,7 @@ def test_mlx_runtime_manager_uses_hosted_weights_layout() -> None:
 
 def test_mlx_runtime_manager_rejects_conflicting_reference_options() -> None:
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -617,9 +596,7 @@ def test_mlx_runtime_manager_rejects_conflicting_reference_options() -> None:
 
 def test_mlx_runtime_manager_rejects_no_reference_false_without_reference_wav() -> None:
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -638,9 +615,7 @@ def test_mlx_runtime_manager_rejects_no_reference_false_without_reference_wav() 
 
 def test_mlx_runtime_manager_rejects_invalid_voicedesign_preset() -> None:
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -659,9 +634,7 @@ def test_mlx_runtime_manager_rejects_invalid_voicedesign_preset() -> None:
 
 def test_mlx_runtime_manager_rejects_invalid_caption_option_type() -> None:
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -680,9 +653,7 @@ def test_mlx_runtime_manager_rejects_invalid_caption_option_type() -> None:
 
 def test_mlx_runtime_manager_rejects_invalid_cfg_timestep_range() -> None:
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=fake_module_loader,
     )
 
@@ -704,9 +675,7 @@ def test_mlx_runtime_manager_reports_missing_dependencies_clearly() -> None:
         raise RuntimeUnavailableError("Irodori-TTS-MLX runtime dependencies are not installed.")
 
     manager = IrodoriMLXRuntimeManager(
-        IrodoriRuntimeConfig(
-            weights_path="/weights/model.npz", model_config_json="/weights/model_config.json"
-        ),
+        hosted_config(),
         module_loader=missing_module_loader,
     )
 

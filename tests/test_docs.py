@@ -17,8 +17,6 @@ def test_real_model_setup_doc_covers_required_weight_sources_and_smoke_commands(
     for required in (
         "IRODORI_MLX_WEIGHTS_REPO",
         "IRODORI_MLX_WEIGHTS_DIR",
-        "IRODORI_MLX_WEIGHTS_PATH",
-        "IRODORI_MLX_MODEL_CONFIG_JSON",
         "irodori_mlx_manifest.json",
         "model_config.json",
         "tokenizer_config.json",
@@ -68,7 +66,7 @@ def test_deployment_doc_covers_operational_configuration() -> None:
         "Apple Silicon",
         "python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000",
         "IRODORI_SERVER_BEARER_TOKEN",
-        "test -n \"$IRODORI_SERVER_BEARER_TOKEN\"",
+        'test -n "$IRODORI_SERVER_BEARER_TOKEN"',
         "IRODORI_API_KEY",
         "Authorization: Bearer",
         "IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS",

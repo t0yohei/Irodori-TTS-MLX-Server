@@ -13,7 +13,6 @@ SMOKE_ENABLED_ENV = "IRODORI_REAL_MLX_SMOKE"
 WEIGHT_SOURCE_ENVS = (
     "IRODORI_MLX_WEIGHTS_REPO",
     "IRODORI_MLX_WEIGHTS_DIR",
-    "IRODORI_MLX_WEIGHTS_PATH",
 )
 
 
@@ -33,18 +32,12 @@ pytestmark = [
     ),
     pytest.mark.skipif(
         not _configured_weight_sources(),
-        reason=(
-            "set one of IRODORI_MLX_WEIGHTS_REPO, IRODORI_MLX_WEIGHTS_DIR, "
-            "or IRODORI_MLX_WEIGHTS_PATH"
-        ),
+        reason=("set IRODORI_MLX_WEIGHTS_REPO or IRODORI_MLX_WEIGHTS_DIR"),
     ),
 ]
 
 
 def test_real_mlx_voicedesign_speech_endpoint_returns_non_empty_wav() -> None:
-    if os.getenv("IRODORI_MLX_WEIGHTS_PATH") and not os.getenv("IRODORI_MLX_MODEL_CONFIG_JSON"):
-        pytest.skip("set IRODORI_MLX_MODEL_CONFIG_JSON when using IRODORI_MLX_WEIGHTS_PATH")
-
     client = TestClient(create_app(config=ServerConfig()))
 
     health_response = client.get("/health")
@@ -55,12 +48,16 @@ def test_real_mlx_voicedesign_speech_endpoint_returns_non_empty_wav() -> None:
         "/v1/audio/speech",
         json={
             "model": os.getenv("IRODORI_MLX_MODEL_ID", "irodori-tts-mlx"),
-            "input": os.getenv("IRODORI_REAL_MLX_SMOKE_TEXT", "こんにちは。これは実行時スモークテストです。"),
+            "input": os.getenv(
+                "IRODORI_REAL_MLX_SMOKE_TEXT", "こんにちは。これは実行時スモークテストです。"
+            ),
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
                 "no_reference": True,
-                "caption": os.getenv("IRODORI_REAL_MLX_SMOKE_CAPTION", "落ち着いた明瞭なナレーション"),
+                "caption": os.getenv(
+                    "IRODORI_REAL_MLX_SMOKE_CAPTION", "落ち着いた明瞭なナレーション"
+                ),
                 "preset": os.getenv("IRODORI_REAL_MLX_SMOKE_PRESET", "fast"),
                 "chunking": False,
             },
