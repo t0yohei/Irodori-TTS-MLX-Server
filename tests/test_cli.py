@@ -155,7 +155,9 @@ def test_runtime_config_from_env_ignores_empty_codec_path(monkeypatch) -> None:
 
 def test_runtime_config_from_env_defaults_hosted_codec_artifact_repo(monkeypatch) -> None:
     monkeypatch.delenv("IRODORI_MLX_CODEC_ARTIFACT_REPO", raising=False)
+    monkeypatch.delenv("IRODORI_MLX_CODEC_RUNTIME_MODE", raising=False)
 
-    assert runtime_config_from_env().codec_artifact_repo == (
-        "t0yohei/Irodori-TTS-MLX-DACVAE-Codec"
-    )
+    config = runtime_config_from_env()
+
+    assert config.codec_artifact_repo == "t0yohei/Irodori-TTS-MLX-DACVAE-Codec"
+    assert config.codec_runtime_mode == "mlx"
