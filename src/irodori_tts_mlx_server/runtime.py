@@ -16,10 +16,13 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 PRESET_NUM_STEPS = {
+    "ultra-fast": 8,
     "fast": 12,
     "balanced": 24,
     "quality": 40,
 }
+ULTRA_FAST_SHORT_PROMPT_MAX_AUTO_SECONDS = 2.5
+ULTRA_FAST_SHORT_PROMPT_MAX_ESTIMATE_SECONDS = 3.0
 DEFAULT_TAIL_TRIM_MS = 0
 DEFAULT_TAIL_SILENCE_TRIM_MS = 0
 DEFAULT_TAIL_SILENCE_KEEP_MS = 40
@@ -345,6 +348,11 @@ def _num_steps_option(options: dict[str, Any]) -> int:
     return _int_option(options, "num_steps", default=default)
 
 
+def _runtime_generation_request_kwargs(runtime_module: Any, **kwargs: Any) -> dict[str, Any]:
+    signature = inspect.signature(runtime_module.GenerationRequest)
+    return {key: value for key, value in kwargs.items() if key in signature.parameters}
+
+
 def split_text_for_generation(text: str, *, max_chars: int) -> list[str]:
     """Split long text on natural boundaries before falling back to hard slices."""
 
@@ -589,7 +597,8 @@ class IrodoriMLXRuntimeManager:
         audio_chunks: list[bytes] = []
         for chunk_index, chunk in enumerate(chunks):
             chunk_irodori = dict(request.irodori)
-            chunk_irodori["seconds"] = chunk_seconds[chunk_index]
+            if "seconds" in chunk_irodori or chunk_seconds[chunk_index] is not None:
+                chunk_irodori["seconds"] = chunk_seconds[chunk_index]
             chunk_request = SpeechGenerationRequest(
                 model=request.model,
                 input=chunk,
@@ -754,6 +763,7 @@ class IrodoriMLXRuntimeManager:
             )
         if not reference_wav and not no_reference:
             raise RuntimeRequestError("irodori.no_reference=false requires irodori.reference_wav.")
+        duration_scale_explicit = "duration_scale" in options
         duration_scale = _float_option(options, "duration_scale", default=None)
         if duration_scale is None:
             duration_scale = 1.0 / request.speed
@@ -761,23 +771,40 @@ class IrodoriMLXRuntimeManager:
         cfg_max_t = _required_float_option(options, "cfg_max_t", default=1.0, positive=False)
         if cfg_min_t > cfg_max_t:
             raise RuntimeRequestError("irodori.cfg_min_t must be <= irodori.cfg_max_t.")
+        seconds_explicit = "seconds" in options
+        seconds = _float_option(options, "seconds", default=None)
+        max_auto_seconds = None
+        max_auto_estimate_seconds = None
+        if (
+            _string_option(options, "preset") == "ultra-fast"
+            and not seconds_explicit
+            and not duration_scale_explicit
+            and request.speed == 1.0
+        ):
+            max_auto_seconds = ULTRA_FAST_SHORT_PROMPT_MAX_AUTO_SECONDS
+            max_auto_estimate_seconds = ULTRA_FAST_SHORT_PROMPT_MAX_ESTIMATE_SECONDS
         return runtime_module.GenerationRequest(
-            text=request.input,
-            output_wav=str(output_path),
-            reference_wav=reference_wav,
-            no_reference=no_reference,
-            caption=_string_option(options, "caption"),
-            seconds=_float_option(options, "seconds", default=None),
-            duration_scale=duration_scale,
-            num_steps=_num_steps_option(options),
-            cfg_scale_text=_required_float_option(options, "cfg_scale_text", default=3.0),
-            cfg_scale_caption=_required_float_option(options, "cfg_scale_caption", default=3.0),
-            cfg_scale_speaker=_required_float_option(options, "cfg_scale_speaker", default=5.0),
-            cfg_guidance_mode=_string_option(options, "cfg_guidance_mode", default="independent")
-            or "independent",
-            cfg_min_t=cfg_min_t,
-            cfg_max_t=cfg_max_t,
-            seed=_int_option(options, "seed", default=0, minimum=0),
-            max_reference_seconds=_float_option(options, "max_reference_seconds", default=30.0),
-            use_context_kv_cache=not _bool_option(options, "no_context_kv_cache", default=False),
+            **_runtime_generation_request_kwargs(
+                runtime_module,
+                text=request.input,
+                output_wav=str(output_path),
+                reference_wav=reference_wav,
+                no_reference=no_reference,
+                caption=_string_option(options, "caption"),
+                seconds=seconds,
+                duration_scale=duration_scale,
+                max_auto_seconds=max_auto_seconds,
+                max_auto_estimate_seconds=max_auto_estimate_seconds,
+                num_steps=_num_steps_option(options),
+                cfg_scale_text=_required_float_option(options, "cfg_scale_text", default=3.0),
+                cfg_scale_caption=_required_float_option(options, "cfg_scale_caption", default=3.0),
+                cfg_scale_speaker=_required_float_option(options, "cfg_scale_speaker", default=5.0),
+                cfg_guidance_mode=_string_option(options, "cfg_guidance_mode", default="independent")
+                or "independent",
+                cfg_min_t=cfg_min_t,
+                cfg_max_t=cfg_max_t,
+                seed=_int_option(options, "seed", default=0, minimum=0),
+                max_reference_seconds=_float_option(options, "max_reference_seconds", default=30.0),
+                use_context_kv_cache=not _bool_option(options, "no_context_kv_cache", default=False),
+            )
         )

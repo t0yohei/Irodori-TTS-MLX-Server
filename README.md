@@ -260,9 +260,12 @@ threshold defaults to `256` and can be tuned with `tail_silence_threshold`.
 For VoiceDesign v2 caption-conditioned hosted weights, set
 `irodori.no_reference=true` and provide a concise style caption such as
 `"calm narration, clear diction"` or `"bright young voice, energetic delivery"`.
-`irodori.preset` accepts `fast`, `balanced`, or `quality`, mapping to 12, 24, or
-40 sampling steps. An explicit `irodori.num_steps` overrides the preset. Do not
-set `irodori.reference_wav` together with `irodori.no_reference=true`; if
+`irodori.preset` accepts `ultra-fast`, `fast`, `balanced`, or `quality`, mapping
+to 8, 12, 24, or 40 sampling steps. `ultra-fast` also passes the short-prompt
+auto-duration cap supported by recent Irodori-TTS-MLX runtimes when neither
+`irodori.seconds` nor `irodori.duration_scale` is explicit and OpenAI `speed`
+remains `1.0`. An explicit `irodori.num_steps` overrides the preset. Do not set
+`irodori.reference_wav` together with `irodori.no_reference=true`; if
 `irodori.no_reference=false`, a `reference_wav` path is required.
 
 ## Validation

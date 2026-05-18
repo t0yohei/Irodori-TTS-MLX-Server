@@ -28,6 +28,8 @@ class FakeGenerationRequest:
     caption: str | None = None
     seconds: float | None = None
     duration_scale: float = 1.0
+    max_auto_seconds: float | None = None
+    max_auto_estimate_seconds: float | None = None
     num_steps: int = 40
     cfg_scale_text: float = 3.0
     cfg_scale_caption: float = 3.0
@@ -227,6 +229,8 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
         caption="warm voice",
         seconds=1.5,
         duration_scale=0.5,
+        max_auto_seconds=None,
+        max_auto_estimate_seconds=None,
         num_steps=12,
         cfg_scale_text=2.5,
         cfg_scale_caption=3.5,
@@ -269,6 +273,88 @@ def test_mlx_runtime_manager_maps_voicedesign_preset_to_runtime_steps() -> None:
     assert request.reference_wav is None
     assert request.num_steps == 24
     assert request.cfg_scale_caption == 3.5
+
+
+def test_mlx_runtime_manager_maps_ultra_fast_preset_to_runtime_policy() -> None:
+    FakeMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="alloy",
+            response_format="wav",
+            speed=1.0,
+            irodori={"no_reference": True, "preset": "ultra-fast"},
+        )
+    )
+
+    request = FakeMLXRuntime.instances[0].requests[0]
+    assert request.num_steps == 8
+    assert request.max_auto_seconds == 2.5
+    assert request.max_auto_estimate_seconds == 3.0
+
+
+def test_mlx_runtime_manager_skips_ultra_fast_cap_when_duration_scale_is_explicit() -> None:
+    FakeMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="alloy",
+            response_format="wav",
+            speed=1.0,
+            irodori={
+                "no_reference": True,
+                "preset": "ultra-fast",
+                "duration_scale": 1.25,
+            },
+        )
+    )
+
+    request = FakeMLXRuntime.instances[0].requests[0]
+    assert request.num_steps == 8
+    assert request.duration_scale == 1.25
+    assert request.max_auto_seconds is None
+    assert request.max_auto_estimate_seconds is None
+
+
+def test_mlx_runtime_manager_skips_ultra_fast_cap_when_seconds_is_explicit_null() -> None:
+    FakeMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="alloy",
+            response_format="wav",
+            speed=1.0,
+            irodori={
+                "no_reference": True,
+                "preset": "ultra-fast",
+                "seconds": None,
+            },
+        )
+    )
+
+    request = FakeMLXRuntime.instances[0].requests[0]
+    assert request.num_steps == 8
+    assert request.seconds is None
+    assert request.max_auto_seconds is None
+    assert request.max_auto_estimate_seconds is None
 
 
 def test_mlx_runtime_manager_lets_explicit_num_steps_override_preset() -> None:
