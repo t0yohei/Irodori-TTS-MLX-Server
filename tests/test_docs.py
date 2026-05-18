@@ -199,3 +199,22 @@ def test_readme_covers_managed_reference_voice_scope() -> None:
         "arbitrary local paths are rejected",
     ):
         assert required in readme
+
+
+def test_japanese_readme_is_linked_and_covers_public_setup() -> None:
+    readme = (ROOT / "README.md").read_text()
+    japanese_readme = (ROOT / "README.ja.md").read_text()
+
+    assert "README.ja.md" in readme
+    assert "README.md" in japanese_readme
+    for required in (
+        "OpenAI 互換",
+        "Apple Silicon",
+        "IRODORI_MLX_WEIGHTS_REPO",
+        "IRODORI_MLX_WEIGHTS_DIR",
+        "curl http://127.0.0.1:8000/v1/audio/speech",
+        "IRODORI_SERVER_VOICES_DIR",
+        "Authorization: Bearer <token>",
+        "pytest -m real_mlx tests/test_real_mlx_smoke.py",
+    ):
+        assert required in japanese_readme

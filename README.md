@@ -1,24 +1,42 @@
 # Irodori-TTS-MLX-Server
 
+[日本語 README](README.ja.md)
+
 OpenAI-compatible local TTS server for
 [Irodori-TTS-MLX](https://github.com/t0yohei/Irodori-TTS-MLX).
 
-The initial implementation is intentionally scoped to a small MVP: expose
-`POST /v1/audio/speech` for VoiceDesign v2 no-reference/caption generation
-through an MLX-backed runtime. See [docs/mvp_scope.md](docs/mvp_scope.md) for
-the current API target, non-goals, and follow-up implementation boundaries.
+This repository provides a FastAPI server for local Apple Silicon MLX
+inference. It keeps an OpenAI-style client shape where that maps cleanly to
+Irodori-TTS-MLX, while keeping the runtime and deployment boundary explicit.
+The current public surface includes:
 
-This scaffold includes the package bootstrap, local development workflow,
-`GET /health`, and the OpenAI-compatible MVP routes:
-
+- `GET /health`
 - `GET /v1/models`
 - `POST /v1/audio/speech`
 - `GET`, `POST`, `GET by id`, `PUT`, and `DELETE` for
   `/v1/audio/voices`
+- OpenAI-style JSON errors for validation, auth, queue, encoder, and runtime
+  failures
 
 The default runtime is import-safe without model weights. It lists the MVP model
-id but returns a clear `runtime_unavailable` error for speech generation until a
+id but returns a clear `runtime_unavailable` error for speech generation until
 converted Irodori-TTS-MLX weights are configured.
+
+## Documentation Map
+
+- [docs/real_model_setup.md](docs/real_model_setup.md): fresh checkout setup,
+  converted-weights layout, local run commands, speech smoke request, and common
+  error codes.
+- [docs/openai_client_examples.md](docs/openai_client_examples.md): `curl` and
+  Python OpenAI client examples, bearer auth, FFmpeg-backed response formats,
+  and unsupported streaming behavior.
+- [docs/deployment.md](docs/deployment.md): production-ish local deployment on
+  Apple Silicon, launchd templates, auth, queue controls, health checks, logs,
+  and operational environment variables.
+- [docs/upstream_compatibility.md](docs/upstream_compatibility.md): upstream
+  feature comparison and compatibility rationale.
+- [docs/mvp_scope.md](docs/mvp_scope.md): supported public server surface and
+  non-goals.
 
 ## Relationship to Aratako/Irodori-TTS-Server
 
@@ -43,13 +61,14 @@ long-text chunking, queue controls, optional auth, or multiple encoded response 
 Choose this server when you specifically want to exercise Irodori-TTS-MLX on
 Apple Silicon and can provide a hosted converted-weights layout.
 
-The current MLX server MVP does not claim parity with the upstream server. The
-initial surface supports the OpenAI-compatible model list and speech endpoint,
-VoiceDesign v2 no-reference/caption options, managed WAV reference uploads,
-`wav` output, and clear configuration errors before weights are available.
-Runtime smoke evidence, compressed audio formats, long-text chunking, queueing,
-bearer-token auth, and full upstream option coverage are tracked as follow-up
-work unless explicitly documented as implemented here.
+The current MLX server does not claim parity with the upstream server. The
+implemented surface supports the OpenAI-compatible model list and speech
+endpoint, VoiceDesign v2 no-reference/caption options, managed reference voice
+uploads, `wav` and raw `pcm` output, FFmpeg-backed `mp3`, `flac`, `opus`, and
+`aac` output, long-text chunking, queue controls, optional bearer auth, and
+clear configuration errors before weights are available. Full upstream option
+coverage is tracked as compatibility work unless explicitly documented as
+implemented here.
 
 See [docs/upstream_compatibility.md](docs/upstream_compatibility.md) for the
 concrete upstream compatibility gap matrix.
