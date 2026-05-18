@@ -171,7 +171,12 @@ ID, resolved path, size, mtime, and reference encode options. This avoids
 re-encoding the same managed WAV for repeated v3 requests. Upload, replace, and
 delete operations invalidate the affected voice. Tune
 `IRODORI_SERVER_REFERENCE_CACHE_MAX_ENTRIES` to bound memory use; the default
-is 8 entries, and 0 disables the cache.
+is 8 entries, and 0 disables the cache. For short managed-reference requests
+using the `fast` or `ultra-fast` preset, the server also applies a conservative
+text-length `irodori.seconds` estimate when callers omit both `irodori.seconds`
+and `irodori.duration_scale` and keep `speed=1.0`. This reduces obvious
+over-generation for low-latency replies, while longer text and explicit duration
+controls are left unchanged to avoid clipping.
 
 Security note: the management API does not resolve arbitrary client-supplied file paths.
 
