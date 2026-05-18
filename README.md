@@ -166,6 +166,12 @@ not resolve alias files or latent references.
 Uploads are capped by `IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES`, which defaults
 to 50 MiB. New managed voice files are committed atomically so interrupted
 uploads do not leave partial `<voice_id>.wav` files behind.
+Encoded managed references are cached in memory after first use, keyed by voice
+ID, resolved path, size, mtime, and reference encode options. This avoids
+re-encoding the same managed WAV for repeated v3 requests. Upload, replace, and
+delete operations invalidate the affected voice. Tune
+`IRODORI_SERVER_REFERENCE_CACHE_MAX_ENTRIES` to bound memory use; the default
+is 8 entries, and 0 disables the cache.
 
 Security note: the management API does not resolve arbitrary client-supplied file paths.
 

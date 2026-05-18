@@ -87,6 +87,53 @@ class FakeMLXRuntime:
         return SimpleNamespace(output_wav=request.output_wav)
 
 
+class CountingReferenceBridge:
+    def __init__(self) -> None:
+        self.encode_calls: list[dict[str, object]] = []
+
+    def encode_reference(
+        self,
+        path: str,
+        *,
+        max_seconds: float | None,
+        normalize_db: float | None,
+        ensure_max: bool,
+    ) -> object:
+        self.encode_calls.append(
+            {
+                "path": path,
+                "max_seconds": max_seconds,
+                "normalize_db": normalize_db,
+                "ensure_max": ensure_max,
+            }
+        )
+        return object()
+
+
+class ReferenceEncodingMLXRuntime:
+    instances: list["ReferenceEncodingMLXRuntime"] = []
+
+    def __init__(self, *, config: FakeRuntimeConfig) -> None:
+        self.config = config
+        self.bridge = CountingReferenceBridge()
+        self.raw_bridge = self.bridge
+        self.requests: list[FakeGenerationRequest] = []
+        ReferenceEncodingMLXRuntime.instances.append(self)
+
+    def generate(self, request: FakeGenerationRequest) -> object:
+        self.requests.append(request)
+        assert request.reference_wav is not None
+        self.bridge.encode_reference(
+            request.reference_wav,
+            max_seconds=request.max_reference_seconds,
+            normalize_db=-16.0,
+            ensure_max=True,
+        )
+        with open(request.output_wav, "wb") as fh:
+            fh.write(b"RIFFfakeWAVE")
+        return SimpleNamespace(output_wav=request.output_wav)
+
+
 class WaveMLXRuntime:
     instances: list["WaveMLXRuntime"] = []
 
@@ -735,6 +782,132 @@ def test_mlx_runtime_manager_resolves_default_hosted_codec_repo_for_default_mlx_
     ]
     assert FakeMLXRuntime.instances[-1].config.codec.codec_path == "/hf-cache/dacvae-codec.npz"
     assert FakeMLXRuntime.instances[-1].config.codec.runtime_mode == "mlx"
+
+
+def managed_reference_cache_options(
+    *,
+    voice_id: str = "sample",
+    path: str = "/voices/sample.wav",
+    size: int = 4,
+    mtime_ns: int = 100,
+) -> dict[str, object]:
+    return {
+        "_managed_reference_cache": {
+            "voice_id": voice_id,
+            "path": path,
+            "size": size,
+            "mtime_ns": mtime_ns,
+        }
+    }
+
+
+def reference_request(**irodori_overrides: object) -> SpeechGenerationRequest:
+    cache_info = irodori_overrides.get("_managed_reference_cache")
+    reference_wav = (
+        cache_info["path"]
+        if isinstance(cache_info, dict) and isinstance(cache_info.get("path"), str)
+        else "/voices/sample.wav"
+    )
+    irodori = {
+        "reference_wav": reference_wav,
+        "no_reference": False,
+    }
+    irodori.update(irodori_overrides)
+    return SpeechGenerationRequest(
+        model="irodori-tts-mlx",
+        input="hello",
+        voice="sample",
+        response_format="wav",
+        speed=1.0,
+        irodori=irodori,
+    )
+
+
+def test_mlx_runtime_manager_caches_managed_reference_encoding() -> None:
+    ReferenceEncodingMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        runtime_factory=ReferenceEncodingMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+    manager.configure_managed_reference_cache(max_entries=2)
+    request = reference_request(**managed_reference_cache_options())
+
+    manager.generate_speech(request)
+    manager.generate_speech(request)
+
+    runtime = ReferenceEncodingMLXRuntime.instances[-1]
+    assert len(runtime.raw_bridge.encode_calls) == 1
+    cache = manager.status_metadata()["managed_reference_cache"]
+    assert cache["hits"] == 1
+    assert cache["misses"] == 1
+
+
+def test_mlx_runtime_manager_cache_misses_when_managed_voice_file_changes() -> None:
+    ReferenceEncodingMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        runtime_factory=ReferenceEncodingMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+    manager.configure_managed_reference_cache(max_entries=2)
+
+    manager.generate_speech(reference_request(**managed_reference_cache_options(mtime_ns=100)))
+    manager.generate_speech(reference_request(**managed_reference_cache_options(mtime_ns=200)))
+
+    runtime = ReferenceEncodingMLXRuntime.instances[-1]
+    assert len(runtime.raw_bridge.encode_calls) == 2
+    assert manager.status_metadata()["managed_reference_cache"]["misses"] == 2
+
+
+def test_mlx_runtime_manager_invalidates_managed_reference_cache_by_voice_id() -> None:
+    ReferenceEncodingMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        runtime_factory=ReferenceEncodingMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+    manager.configure_managed_reference_cache(max_entries=2)
+    request = reference_request(**managed_reference_cache_options())
+
+    manager.generate_speech(request)
+    manager.invalidate_managed_reference_cache("sample")
+    manager.generate_speech(request)
+
+    runtime = ReferenceEncodingMLXRuntime.instances[-1]
+    assert len(runtime.raw_bridge.encode_calls) == 2
+
+
+def test_mlx_runtime_manager_managed_reference_cache_is_bounded_and_disableable() -> None:
+    ReferenceEncodingMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        runtime_factory=ReferenceEncodingMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+    manager.configure_managed_reference_cache(max_entries=1)
+
+    manager.generate_speech(
+        reference_request(**managed_reference_cache_options(voice_id="a", path="/voices/a.wav"))
+    )
+    manager.generate_speech(
+        reference_request(**managed_reference_cache_options(voice_id="b", path="/voices/b.wav"))
+    )
+    manager.generate_speech(
+        reference_request(**managed_reference_cache_options(voice_id="a", path="/voices/a.wav"))
+    )
+
+    runtime = ReferenceEncodingMLXRuntime.instances[-1]
+    assert len(runtime.raw_bridge.encode_calls) == 3
+    assert manager.status_metadata()["managed_reference_cache"]["evictions"] == 2
+
+    manager.configure_managed_reference_cache(max_entries=0)
+    disabled_request = reference_request(**managed_reference_cache_options())
+    manager.generate_speech(disabled_request)
+    manager.generate_speech(disabled_request)
+
+    assert len(runtime.raw_bridge.encode_calls) == 5
+    assert manager.status_metadata()["managed_reference_cache"]["enabled"] is False
     assert manager.status_metadata()["codec_artifact_source"] == (
         "t0yohei/Irodori-TTS-MLX-DACVAE-Codec"
     )
@@ -1054,4 +1227,12 @@ def test_mlx_runtime_manager_status_reports_codec_configuration() -> None:
         "codec_artifact_source_kind": None,
         "codec_runtime_mode": "mlx",
         "last_load_error": None,
+        "managed_reference_cache": {
+            "enabled": True,
+            "max_entries": 8,
+            "entries": 0,
+            "hits": 0,
+            "misses": 0,
+            "evictions": 0,
+        },
     }

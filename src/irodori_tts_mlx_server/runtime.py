@@ -9,11 +9,13 @@ import os
 import tempfile
 import threading
 import wave
+from collections import OrderedDict
 from collections.abc import Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterator, Protocol
 
 PRESET_NUM_STEPS = {
     "ultra-fast": 8,
@@ -31,6 +33,7 @@ WAV_MEDIA_TYPE = "audio/wav"
 LORA_ADAPTER_OPTION = "lora_adapter"
 DEFAULT_CODEC_ARTIFACT_REPO = "t0yohei/Irodori-TTS-MLX-DACVAE-Codec"
 MLX_CODEC_RUNTIME_MODES = {"mlx", "mlx-decode", "mlx-decode-subprocess"}
+MANAGED_REFERENCE_CACHE_OPTION = "_managed_reference_cache"
 logger = logging.getLogger("irodori_tts_mlx_server.runtime")
 
 
@@ -67,6 +70,144 @@ class SpeechRuntime(Protocol):
 
     def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
         """Generate complete audio bytes for a validated speech request."""
+
+
+@dataclass(frozen=True)
+class ManagedReferenceCacheInfo:
+    voice_id: str
+    path: str
+    size: int
+    mtime_ns: int
+
+
+class ManagedReferenceCache:
+    """Bounded in-memory cache for server-managed reference audio latents."""
+
+    def __init__(self, max_entries: int) -> None:
+        self.max_entries = max(0, int(max_entries))
+        self._entries: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+        self._lock = threading.Lock()
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+
+    def status_metadata(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "enabled": self.max_entries > 0,
+                "max_entries": self.max_entries,
+                "entries": len(self._entries),
+                "hits": self.hits,
+                "misses": self.misses,
+                "evictions": self.evictions,
+            }
+
+    def clear_voice(self, voice_id: str) -> None:
+        with self._lock:
+            for key in list(self._entries):
+                if key[0] == voice_id:
+                    del self._entries[key]
+
+    def get_or_encode(
+        self,
+        info: ManagedReferenceCacheInfo,
+        *,
+        max_seconds: float | None,
+        normalize_db: float | None,
+        ensure_max: bool,
+        encode: Callable[[], Any],
+    ) -> Any:
+        if self.max_entries <= 0:
+            return encode()
+        key = (
+            info.voice_id,
+            info.path,
+            info.size,
+            info.mtime_ns,
+            max_seconds,
+            normalize_db,
+            ensure_max,
+        )
+        with self._lock:
+            if key in self._entries:
+                self.hits += 1
+                value = self._entries.pop(key)
+                self._entries[key] = value
+                logger.debug(
+                    "managed_reference_cache_hit voice_id=%s path=%s entries=%s",
+                    info.voice_id,
+                    info.path,
+                    len(self._entries),
+                )
+                return value
+            self.misses += 1
+        value = encode()
+        with self._lock:
+            self._entries[key] = value
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+                self.evictions += 1
+        logger.debug(
+            "managed_reference_cache_miss voice_id=%s path=%s entries=%s",
+            info.voice_id,
+            info.path,
+            len(self._entries),
+        )
+        return value
+
+
+class ManagedReferenceCachingBridge:
+    """Thread-local cache wrapper around a DACVAE bridge."""
+
+    def __init__(self, bridge: Any, cache: ManagedReferenceCache) -> None:
+        self._bridge = bridge
+        self._cache = cache
+        self._local = threading.local()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._bridge, name)
+
+    def configure_cache(self, cache: ManagedReferenceCache) -> None:
+        self._cache = cache
+
+    @contextmanager
+    def reference_cache(self, info: ManagedReferenceCacheInfo | None) -> Iterator[None]:
+        previous = getattr(self._local, "reference_info", None)
+        self._local.reference_info = info
+        try:
+            yield
+        finally:
+            self._local.reference_info = previous
+
+    def encode_reference(
+        self,
+        path: str | Path,
+        *,
+        max_seconds: float | None,
+        normalize_db: float | None,
+        ensure_max: bool,
+    ) -> Any:
+        info = getattr(self._local, "reference_info", None)
+        path_text = str(path)
+        if info is None or path_text != info.path:
+            return self._bridge.encode_reference(
+                path,
+                max_seconds=max_seconds,
+                normalize_db=normalize_db,
+                ensure_max=ensure_max,
+            )
+        return self._cache.get_or_encode(
+            info,
+            max_seconds=max_seconds,
+            normalize_db=normalize_db,
+            ensure_max=ensure_max,
+            encode=lambda: self._bridge.encode_reference(
+                path,
+                max_seconds=max_seconds,
+                normalize_db=normalize_db,
+                ensure_max=ensure_max,
+            ),
+        )
 
 
 class UnconfiguredSpeechRuntime:
@@ -171,7 +312,9 @@ def runtime_config_from_env() -> IrodoriRuntimeConfig:
         caption_max_length=_env_int("IRODORI_MLX_CAPTION_MAX_LENGTH"),
         codec_repo=os.getenv("IRODORI_MLX_CODEC_REPO", "Aratako/Semantic-DACVAE-Japanese-32dim"),
         codec_path=os.getenv("IRODORI_MLX_CODEC_PATH") or None,
-        codec_artifact_repo=os.getenv("IRODORI_MLX_CODEC_ARTIFACT_REPO", DEFAULT_CODEC_ARTIFACT_REPO)
+        codec_artifact_repo=os.getenv(
+            "IRODORI_MLX_CODEC_ARTIFACT_REPO", DEFAULT_CODEC_ARTIFACT_REPO
+        )
         or None,
         codec_artifact_revision=os.getenv("IRODORI_MLX_CODEC_ARTIFACT_REVISION") or None,
         codec_device=os.getenv("IRODORI_MLX_CODEC_DEVICE", "cpu"),
@@ -351,6 +494,27 @@ def _num_steps_option(options: dict[str, Any]) -> int:
 def _runtime_generation_request_kwargs(runtime_module: Any, **kwargs: Any) -> dict[str, Any]:
     signature = inspect.signature(runtime_module.GenerationRequest)
     return {key: value for key, value in kwargs.items() if key in signature.parameters}
+
+
+def _managed_reference_cache_info(options: dict[str, Any]) -> ManagedReferenceCacheInfo | None:
+    value = options.get(MANAGED_REFERENCE_CACHE_OPTION)
+    if not isinstance(value, dict):
+        return None
+    try:
+        voice_id = value["voice_id"]
+        path = value["path"]
+        size = int(value["size"])
+        mtime_ns = int(value["mtime_ns"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not isinstance(voice_id, str) or not isinstance(path, str):
+        return None
+    return ManagedReferenceCacheInfo(
+        voice_id=voice_id,
+        path=path,
+        size=size,
+        mtime_ns=mtime_ns,
+    )
 
 
 def split_text_for_generation(text: str, *, max_chars: int) -> list[str]:
@@ -552,6 +716,8 @@ class IrodoriMLXRuntimeManager:
         self._resolved_codec_source: str | None = None
         self._resolved_codec_source_kind: str | None = None
         self._loading = False
+        self._managed_reference_cache = ManagedReferenceCache(max_entries=8)
+        self._managed_reference_bridge: ManagedReferenceCachingBridge | None = None
         if config.preload:
             self._get_runtime()
 
@@ -576,7 +742,17 @@ class IrodoriMLXRuntimeManager:
             "codec_artifact_source_kind": self._resolved_codec_source_kind,
             "codec_runtime_mode": self.config.codec_runtime_mode,
             "last_load_error": self._load_error,
+            "managed_reference_cache": self._managed_reference_cache.status_metadata(),
         }
+
+    def configure_managed_reference_cache(self, *, max_entries: int) -> None:
+        self._managed_reference_cache = ManagedReferenceCache(max_entries=max_entries)
+        self._managed_reference_bridge = None
+        if self._runtime is not None:
+            self._install_managed_reference_cache_bridge(self._runtime)
+
+    def invalidate_managed_reference_cache(self, voice_id: str) -> None:
+        self._managed_reference_cache.clear_voice(voice_id)
 
     def _load_state(self) -> str:
         if self._runtime is not None:
@@ -622,7 +798,14 @@ class IrodoriMLXRuntimeManager:
                 generation_request = self._build_generation_request(request, output_path)
             except ValueError as exc:
                 raise RuntimeRequestError(str(exc)) from exc
-            runtime.generate(generation_request)
+            cache_info = _managed_reference_cache_info(request.irodori)
+            cache_context = (
+                self._managed_reference_bridge.reference_cache(cache_info)
+                if self._managed_reference_bridge is not None
+                else nullcontext()
+            )
+            with cache_context:
+                runtime.generate(generation_request)
             return output_path.read_bytes()
         except RuntimeRequestError:
             raise
@@ -676,6 +859,7 @@ class IrodoriMLXRuntimeManager:
                     self.config.configured,
                 )
                 self._runtime = self._build_runtime()
+                self._install_managed_reference_cache_bridge(self._runtime)
             except RuntimeUnavailableError as exc:
                 self._load_error = str(exc)
                 logger.error("runtime_load_failed model_id=%s error=%s", self.config.model_id, exc)
@@ -721,6 +905,18 @@ class IrodoriMLXRuntimeManager:
         factory = self._runtime_factory or runtime_module.MLXDACVAERuntime
         return factory(config=runtime_config)
 
+    def _install_managed_reference_cache_bridge(self, runtime: Any) -> None:
+        bridge = getattr(runtime, "bridge", None)
+        if bridge is None:
+            return
+        if isinstance(bridge, ManagedReferenceCachingBridge):
+            bridge.configure_cache(self._managed_reference_cache)
+            self._managed_reference_bridge = bridge
+            return
+        proxy = ManagedReferenceCachingBridge(bridge, self._managed_reference_cache)
+        runtime.bridge = proxy
+        self._managed_reference_bridge = proxy
+
     def _resolve_codec_path(self, resolve_codec_artifact_source: Callable[..., Any]) -> str | None:
         if self.config.codec_path:
             self._resolved_codec_source = self.config.codec_path
@@ -737,7 +933,9 @@ class IrodoriMLXRuntimeManager:
                 revision=self.config.codec_artifact_revision,
             )
         except ValueError as exc:
-            raise RuntimeUnavailableError(f"Irodori-TTS-MLX codec artifact could not be loaded: {exc}") from exc
+            raise RuntimeUnavailableError(
+                f"Irodori-TTS-MLX codec artifact could not be loaded: {exc}"
+            ) from exc
         if layout is None:
             raise RuntimeUnavailableError(
                 "Irodori-TTS-MLX codec artifact resolver returned no layout. Set "
@@ -799,12 +997,16 @@ class IrodoriMLXRuntimeManager:
                 cfg_scale_text=_required_float_option(options, "cfg_scale_text", default=3.0),
                 cfg_scale_caption=_required_float_option(options, "cfg_scale_caption", default=3.0),
                 cfg_scale_speaker=_required_float_option(options, "cfg_scale_speaker", default=5.0),
-                cfg_guidance_mode=_string_option(options, "cfg_guidance_mode", default="independent")
+                cfg_guidance_mode=_string_option(
+                    options, "cfg_guidance_mode", default="independent"
+                )
                 or "independent",
                 cfg_min_t=cfg_min_t,
                 cfg_max_t=cfg_max_t,
                 seed=_int_option(options, "seed", default=0, minimum=0),
                 max_reference_seconds=_float_option(options, "max_reference_seconds", default=30.0),
-                use_context_kv_cache=not _bool_option(options, "no_context_kv_cache", default=False),
+                use_context_kv_cache=not _bool_option(
+                    options, "no_context_kv_cache", default=False
+                ),
             )
         )

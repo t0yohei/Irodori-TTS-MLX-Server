@@ -22,6 +22,7 @@ from irodori_tts_mlx_server.audio import (
     ensure_response_format_available,
 )
 from irodori_tts_mlx_server.runtime import (
+    MANAGED_REFERENCE_CACHE_OPTION,
     RuntimeRequestError,
     RuntimeUnavailableError,
     SpeechGenerationRequest,
@@ -406,6 +407,28 @@ def _server_health_metadata(
     return metadata
 
 
+def _configure_managed_reference_cache(runtime: SpeechRuntime, *, max_entries: int) -> None:
+    configure = getattr(runtime, "configure_managed_reference_cache", None)
+    if callable(configure):
+        configure(max_entries=max_entries)
+
+
+def _invalidate_managed_reference_cache(runtime: SpeechRuntime, voice_id: str) -> None:
+    invalidate = getattr(runtime, "invalidate_managed_reference_cache", None)
+    if callable(invalidate):
+        invalidate(voice_id)
+
+
+def _managed_reference_cache_metadata(voice_id: str, path: Any) -> dict[str, Any]:
+    stat = path.stat()
+    return {
+        "voice_id": voice_id,
+        "path": str(path),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+
+
 def _require_bearer_auth(config: ServerConfig, request: Request) -> None:
     if not config.auth_enabled:
         return
@@ -428,6 +451,7 @@ def _apply_managed_voice_reference(
     request: AudioSpeechRequest, voice_registry: VoiceRegistry
 ) -> dict[str, Any]:
     irodori_options = dict(request.irodori)
+    irodori_options.pop(MANAGED_REFERENCE_CACHE_OPTION, None)
     if "reference_wav" in irodori_options:
         reference_wav = irodori_options["reference_wav"]
         if not isinstance(reference_wav, str) or not reference_wav.strip():
@@ -438,8 +462,11 @@ def _apply_managed_voice_reference(
                 code="invalid_irodori_options",
             )
         try:
-            irodori_options["reference_wav"] = str(
-                voice_registry.validate_reference_path(reference_wav)
+            resolved_reference = voice_registry.validate_reference_path(reference_wav)
+            irodori_options["reference_wav"] = str(resolved_reference)
+            irodori_options[MANAGED_REFERENCE_CACHE_OPTION] = _managed_reference_cache_metadata(
+                resolved_reference.stem,
+                resolved_reference,
             )
         except ValueError as exc:
             raise openai_error(
@@ -471,6 +498,10 @@ def _apply_managed_voice_reference(
 
     irodori_options["reference_wav"] = str(voice_file.path)
     irodori_options["no_reference"] = False
+    irodori_options[MANAGED_REFERENCE_CACHE_OPTION] = _managed_reference_cache_metadata(
+        voice_file.voice_id,
+        voice_file.path,
+    )
     return irodori_options
 
 
@@ -498,6 +529,10 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
     synthesis_limiter = SynthesisLimiter(
         max_concurrent=server_config.max_concurrent_synthesis,
         queue_timeout_seconds=server_config.queue_timeout_seconds,
+    )
+    _configure_managed_reference_cache(
+        speech_runtime,
+        max_entries=server_config.reference_cache_max_entries,
     )
     voice_registry = VoiceRegistry(server_config.voices_dir)
     app = FastAPI(title="Irodori-TTS-MLX Server", version="0.1.0")
@@ -638,6 +673,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
         except OSError as exc:
             raise _voice_storage_error(exc)
+        _invalidate_managed_reference_cache(speech_runtime, resolved_voice_id)
         return VoiceUploadResponse(**voice_file.metadata())
 
     @app.get("/v1/audio/voices/{voice_id}", tags=["openai"])
@@ -693,6 +729,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             raise openai_error(str(exc), status_code=400, param="voice_id", code="invalid_voice")
         except OSError as exc:
             raise _voice_storage_error(exc)
+        _invalidate_managed_reference_cache(speech_runtime, voice_id)
         return VoiceUploadResponse(**voice_file.metadata())
 
     @app.delete("/v1/audio/voices/{voice_id}", tags=["openai"])
@@ -713,6 +750,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                 param="voice_id",
                 code="voice_not_found",
             )
+        _invalidate_managed_reference_cache(speech_runtime, voice_id)
         return {"id": voice_id, "object": "voice_file", "deleted": True}
 
     @app.post("/v1/audio/speech", tags=["openai"])

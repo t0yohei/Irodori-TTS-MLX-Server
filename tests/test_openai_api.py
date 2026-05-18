@@ -17,6 +17,7 @@ from irodori_tts_mlx_server import create_app
 from irodori_tts_mlx_server.config import ServerConfig, server_config_from_env
 from irodori_tts_mlx_server.factory import _install_voice_upload_size_guard
 from irodori_tts_mlx_server.runtime import (
+    MANAGED_REFERENCE_CACHE_OPTION,
     RuntimeRequestError,
     SpeechGenerationRequest,
     SpeechGenerationResult,
@@ -52,6 +53,19 @@ class MockSpeechRuntime:
         return SpeechGenerationResult(audio=wav_bytes(), media_type="audio/wav")
 
 
+class CacheTrackingSpeechRuntime(MockSpeechRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.configured_cache_entries: list[int] = []
+        self.invalidated_voice_ids: list[str] = []
+
+    def configure_managed_reference_cache(self, *, max_entries: int) -> None:
+        self.configured_cache_entries.append(max_entries)
+
+    def invalidate_managed_reference_cache(self, voice_id: str) -> None:
+        self.invalidated_voice_ids.append(voice_id)
+
+
 class FalseyMockSpeechRuntime(MockSpeechRuntime):
     def __len__(self) -> int:
         return 0
@@ -81,6 +95,22 @@ class BlockingSpeechRuntime(MockSpeechRuntime):
         if not self.release.wait(timeout=5):
             raise AssertionError("test did not release blocked synthesis")
         return SpeechGenerationResult(audio=wav_bytes(), media_type="audio/wav")
+
+
+def assert_managed_reference_options(
+    options: dict[str, object],
+    *,
+    path: str,
+    voice_id: str,
+) -> None:
+    assert options["reference_wav"] == path
+    assert options["no_reference"] is False
+    cache = options[MANAGED_REFERENCE_CACHE_OPTION]
+    assert isinstance(cache, dict)
+    assert cache["voice_id"] == voice_id
+    assert cache["path"] == path
+    assert cache["size"] >= 0
+    assert cache["mtime_ns"] > 0
 
 
 def test_v1_models_returns_openai_compatible_model_list() -> None:
@@ -195,15 +225,46 @@ def test_voice_upload_list_get_replace_delete_and_speech_resolution(tmp_path) ->
     ]
     assert fetched.status_code == 200
     assert speech.status_code == 200
-    assert runtime.requests[-1].irodori == {
-        "reference_wav": str(tmp_path / "voices" / "sample.wav"),
-        "no_reference": False,
-    }
+    assert_managed_reference_options(
+        runtime.requests[-1].irodori,
+        path=str(tmp_path / "voices" / "sample.wav"),
+        voice_id="sample",
+    )
     assert replaced.status_code == 200
     assert replaced.json()["bytes"] == len(b"new wav")
     assert deleted.status_code == 200
     assert deleted.json() == {"id": "sample", "object": "voice_file", "deleted": True}
     assert missing.status_code == 404
+
+
+def test_voice_cache_limit_configures_runtime_and_mutations_invalidate_voice(tmp_path) -> None:
+    runtime = CacheTrackingSpeechRuntime()
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            config=ServerConfig(
+                voices_dir=tmp_path / "voices",
+                reference_cache_max_entries=2,
+            ),
+        )
+    )
+
+    created = client.post(
+        "/v1/audio/voices",
+        files={"file": ("sample.wav", b"old wav", "audio/wav")},
+        data={"voice_id": "sample"},
+    )
+    replaced = client.put(
+        "/v1/audio/voices/sample",
+        files={"file": ("sample.wav", b"new wav", "audio/wav")},
+    )
+    deleted = client.delete("/v1/audio/voices/sample")
+
+    assert created.status_code == 201
+    assert replaced.status_code == 200
+    assert deleted.status_code == 200
+    assert runtime.configured_cache_entries == [2]
+    assert runtime.invalidated_voice_ids == ["sample", "sample", "sample"]
 
 
 def test_voice_upload_accepts_managed_non_wav_and_voice_object_resolution(tmp_path) -> None:
@@ -234,10 +295,11 @@ def test_voice_upload_accepts_managed_non_wav_and_voice_object_resolution(tmp_pa
     assert listed.json()["data"][0]["ref_wav"] == str(tmp_path / "voices" / "sample.flac")
     assert speech.status_code == 200
     assert runtime.requests[-1].voice == "sample"
-    assert runtime.requests[-1].irodori == {
-        "reference_wav": str(tmp_path / "voices" / "sample.flac"),
-        "no_reference": False,
-    }
+    assert_managed_reference_options(
+        runtime.requests[-1].irodori,
+        path=str(tmp_path / "voices" / "sample.flac"),
+        voice_id="sample",
+    )
 
 
 @pytest.mark.parametrize("voice", [{"id": False}, {"id": {"nested": "sample"}}, {"id": ""}, False])
@@ -605,10 +667,11 @@ def test_audio_speech_accepts_explicit_managed_reference_wav(tmp_path) -> None:
     )
 
     assert response.status_code == 200
-    assert runtime.requests[-1].irodori == {
-        "reference_wav": str(tmp_path / "sample.wav"),
-        "no_reference": False,
-    }
+    assert_managed_reference_options(
+        runtime.requests[-1].irodori,
+        path=str(tmp_path / "sample.wav"),
+        voice_id="sample",
+    )
 
 
 def test_voice_upload_rejects_large_content_length_before_multipart_spooling(tmp_path) -> None:
@@ -762,10 +825,11 @@ def test_managed_voice_resolution_accepts_upstream_no_ref_false_alias(tmp_path) 
     )
 
     assert response.status_code == 200
-    assert runtime.requests[-1].irodori == {
-        "no_reference": False,
-        "reference_wav": str(tmp_path / "sample.wav"),
-    }
+    assert_managed_reference_options(
+        runtime.requests[-1].irodori,
+        path=str(tmp_path / "sample.wav"),
+        voice_id="sample",
+    )
 
 
 @pytest.mark.parametrize(
@@ -1287,13 +1351,14 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases(tmp_path) ->
     )
 
     assert response.status_code == 200
-    assert runtime.requests[0].irodori == {
-        "reference_wav": str(tmp_path / "reference.wav"),
-        "no_reference": False,
-        "max_reference_seconds": 10,
-        "no_context_kv_cache": False,
-        "chunking": False,
-    }
+    assert runtime.requests[0].irodori["max_reference_seconds"] == 10
+    assert runtime.requests[0].irodori["no_context_kv_cache"] is False
+    assert runtime.requests[0].irodori["chunking"] is False
+    assert_managed_reference_options(
+        runtime.requests[0].irodori,
+        path=str(tmp_path / "reference.wav"),
+        voice_id="reference",
+    )
 
 
 @pytest.mark.parametrize(
@@ -1757,6 +1822,19 @@ def test_server_config_rejects_non_positive_voice_upload_limit_env(monkeypatch) 
     monkeypatch.setenv("IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES", "0")
 
     with pytest.raises(ValueError, match="IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES"):
+        server_config_from_env()
+
+
+def test_server_config_reads_reference_cache_limit_env(monkeypatch) -> None:
+    monkeypatch.setenv("IRODORI_SERVER_REFERENCE_CACHE_MAX_ENTRIES", "0")
+
+    assert server_config_from_env().reference_cache_max_entries == 0
+
+
+def test_server_config_rejects_negative_reference_cache_limit_env(monkeypatch) -> None:
+    monkeypatch.setenv("IRODORI_SERVER_REFERENCE_CACHE_MAX_ENTRIES", "-1")
+
+    with pytest.raises(ValueError, match="IRODORI_SERVER_REFERENCE_CACHE_MAX_ENTRIES"):
         server_config_from_env()
 
 
