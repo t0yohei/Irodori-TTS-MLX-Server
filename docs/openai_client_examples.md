@@ -134,9 +134,45 @@ The OpenAI Python client does not need server-specific transport code. Use
 
 ## Streaming
 
-Streaming synthesis and SSE responses are not supported by this server. Do not
-send `stream=true` or `Accept: text/event-stream` for `/v1/audio/speech`.
+The OpenAI-compatible `/v1/audio/speech` route still returns one completed audio
+file. Do not send `stream=true` or `Accept: text/event-stream` for that route.
 Those requests return a 400 OpenAI-style error with
-`code="unsupported_streaming"`. Request a complete audio file response instead.
-SDK helpers that stream the HTTP download body are different from synthesis
-streaming; they still receive one completed audio file from the server.
+`code="unsupported_streaming"`. SDK helpers that stream the HTTP download body
+are different from synthesis streaming; they still receive one completed audio
+file from the server.
+
+For lower perceived latency, this server also provides an Irodori-specific SSE
+extension that emits each synthesized text chunk as soon as it is ready:
+
+~~~bash
+curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \\
+  -H 'Content-Type: application/json' \\
+  -H 'Accept: text/event-stream' \\
+  -H 'Authorization: Bearer <token>' \\
+  -d '{
+    "model": "irodori-tts-mlx",
+    "input": "First sentence. Second sentence.",
+    "voice": "voicedesign",
+    "response_format": "wav",
+    "irodori": {
+      "no_reference": true,
+      "caption": "clear studio narration",
+      "chunking": true,
+      "chunk_max_chars": 80
+    }
+  }'
+~~~
+
+The response uses Server-Sent Events:
+
+~~~text
+event: audio_chunk
+data: {"index":0,"text":"First sentence.","format":"wav","media_type":"audio/wav","audio_base64":"..."}
+
+event: done
+data: {"chunks":1}
+~~~
+
+`audio_base64` contains one complete audio file for that chunk. Clients can
+decode and enqueue each `audio_chunk` for playback while the server generates
+later chunks. This endpoint is not part of the OpenAI speech API contract.

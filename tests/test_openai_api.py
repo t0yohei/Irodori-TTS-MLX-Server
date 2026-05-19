@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import errno
 import importlib
 import io
+import json
 import os
 import threading
 import time
@@ -111,6 +113,16 @@ def assert_managed_reference_options(
     assert cache["path"] == path
     assert cache["size"] >= 0
     assert cache["mtime_ns"] > 0
+
+
+def sse_events(body: str) -> list[tuple[str, dict[str, object]]]:
+    events: list[tuple[str, dict[str, object]]] = []
+    for block in body.strip().split("\n\n"):
+        lines = block.splitlines()
+        event = next(line.removeprefix("event: ") for line in lines if line.startswith("event: "))
+        data = next(line.removeprefix("data: ") for line in lines if line.startswith("data: "))
+        events.append((event, json.loads(data)))
+    return events
 
 
 def test_v1_models_returns_openai_compatible_model_list() -> None:
@@ -1270,6 +1282,61 @@ def test_audio_speech_zero_queue_timeout_rejects_when_queue_is_full() -> None:
     assert first_status == {"status_code": 200}
 
 
+def test_audio_speech_stream_chunks_returns_queue_timeout_before_streaming() -> None:
+    runtime = BlockingSpeechRuntime()
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            config=ServerConfig(max_concurrent_synthesis=1, queue_timeout_seconds=0.01),
+        )
+    )
+    payload = {
+        "model": "irodori-tts-mlx",
+        "input": "hello. goodbye.",
+        "voice": "voicedesign",
+        "response_format": "wav",
+        "irodori": {"no_reference": True, "chunking": True, "chunk_max_chars": 8},
+    }
+    first_status: dict[str, int] = {}
+
+    def first_request() -> None:
+        first_status["status_code"] = client.post(
+            "/v1/audio/speech/stream-chunks",
+            headers={"accept": "text/event-stream"},
+            json=payload,
+        ).status_code
+
+    thread = threading.Thread(target=first_request)
+    thread.start()
+    assert runtime.started.wait(timeout=2)
+    try:
+        response = client.post(
+            "/v1/audio/speech/stream-chunks",
+            headers={"accept": "text/event-stream"},
+            json=payload,
+        )
+    finally:
+        runtime.release.set()
+        thread.join(timeout=2)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert sse_events(response.text) == [
+        (
+            "error",
+            {
+                "error": {
+                    "message": "Synthesis queue is full or the model is still loading; retry later.",
+                    "type": "server_error",
+                    "param": None,
+                    "code": "synthesis_queue_timeout",
+                }
+            },
+        )
+    ]
+    assert first_status == {"status_code": 200}
+
+
 def test_audio_speech_allows_configured_concurrent_synthesis() -> None:
     class SleepingRuntime(MockSpeechRuntime):
         def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:
@@ -1579,6 +1646,69 @@ def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
         "tail_silence_keep_ms": 40,
         "tail_silence_threshold": 512,
     }
+
+
+def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech/stream-chunks",
+        headers={"accept": "text/event-stream"},
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello. goodbye.",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_reference": True,
+                "chunking": True,
+                "chunk_max_chars": 8,
+                "seconds": 3.0,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert [request.input for request in runtime.requests] == ["hello.", "goodbye."]
+    assert [request.irodori["chunking"] for request in runtime.requests] == [False, False]
+    assert [round(request.irodori["seconds"], 4) for request in runtime.requests] == [
+        1.2857,
+        1.7143,
+    ]
+    events = sse_events(response.text)
+    assert [event for event, _data in events] == ["audio_chunk", "audio_chunk", "done"]
+    first_chunk = events[0][1]
+    assert first_chunk["index"] == 0
+    assert first_chunk["text"] == "hello."
+    assert first_chunk["format"] == "wav"
+    assert first_chunk["media_type"] == "audio/wav"
+    assert base64.b64decode(first_chunk["audio_base64"]) == wav_bytes()
+    assert events[2][1] == {"chunks": 2}
+
+
+def test_audio_speech_stream_chunks_respects_disabled_chunking() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech/stream-chunks",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello. goodbye.",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_reference": True,
+                "chunking": False,
+                "chunk_max_chars": 8,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert [request.input for request in runtime.requests] == ["hello. goodbye."]
+    events = sse_events(response.text)
+    assert [event for event, _data in events] == ["audio_chunk", "done"]
+    assert events[0][1]["text"] == "hello. goodbye."
+    assert events[1][1] == {"chunks": 1}
 
 
 def test_falsey_runtime_injection_is_preserved() -> None:

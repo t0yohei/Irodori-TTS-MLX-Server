@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
 import secrets
 import time
@@ -11,7 +13,7 @@ from typing import Any, AsyncIterator, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
@@ -26,8 +28,10 @@ from irodori_tts_mlx_server.runtime import (
     RuntimeRequestError,
     RuntimeUnavailableError,
     SpeechGenerationRequest,
+    SpeechGenerationResult,
     SpeechRuntime,
     create_default_runtime,
+    split_text_for_generation,
 )
 from irodori_tts_mlx_server.voices import VoiceRegistry
 
@@ -272,8 +276,7 @@ class SynthesisLimiter:
         self._queue_timeout_seconds = queue_timeout_seconds
         self._logger = log
 
-    @asynccontextmanager
-    async def slot(self) -> AsyncIterator[None]:
+    async def acquire(self) -> None:
         try:
             if self._queue_timeout_seconds == 0:
                 if self._semaphore.locked():
@@ -294,10 +297,17 @@ class SynthesisLimiter:
                 error_type="server_error",
                 code="synthesis_queue_timeout",
             ) from exc
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+    @asynccontextmanager
+    async def slot(self) -> AsyncIterator[None]:
+        await self.acquire()
         try:
             yield
         finally:
-            self._semaphore.release()
+            self.release()
 
 
 VOICE_UPLOAD_MULTIPART_OVERHEAD_BYTES = 64 * 1024
@@ -562,6 +572,224 @@ def _apply_short_managed_reference_auto_seconds(
     return updated_options
 
 
+def _ensure_requested_model(runtime: SpeechRuntime, model: str) -> None:
+    if model not in runtime.list_models():
+        raise openai_error(
+            f"Model '{model}' is not available.",
+            status_code=404,
+            param="model",
+            code="model_not_found",
+        )
+
+
+def _ensure_requested_response_format(response_format: str) -> None:
+    try:
+        ensure_response_format_available(response_format)
+    except AudioConversionError as exc:
+        status_code = 400 if exc.code == "unsupported_response_format" else 503
+        raise openai_error(
+            str(exc),
+            status_code=status_code,
+            error_type="server_error" if status_code >= 500 else "invalid_request_error",
+            param="response_format",
+            code=exc.code,
+        ) from exc
+
+
+def _request_irodori_options(
+    request: AudioSpeechRequest, voice_registry: VoiceRegistry
+) -> dict[str, Any]:
+    return _apply_short_managed_reference_auto_seconds(
+        request,
+        _apply_managed_voice_reference(request, voice_registry),
+    )
+
+
+def _speech_generation_request(
+    request: AudioSpeechRequest,
+    *,
+    input_text: str,
+    irodori_options: dict[str, Any],
+) -> SpeechGenerationRequest:
+    return SpeechGenerationRequest(
+        model=request.model,
+        input=input_text,
+        voice=_runtime_voice_from_request(request.voice),
+        response_format="wav",
+        speed=request.speed,
+        irodori=irodori_options,
+    )
+
+
+def _chunk_max_chars(options: dict[str, Any], *, default: int) -> int:
+    raw = options.get("chunk_max_chars", default)
+    if isinstance(raw, bool):
+        raise openai_error(
+            "irodori.chunk_max_chars must be an integer.",
+            status_code=400,
+            param="irodori.chunk_max_chars",
+            code="invalid_irodori_options",
+        )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise openai_error(
+            "irodori.chunk_max_chars must be an integer.",
+            status_code=400,
+            param="irodori.chunk_max_chars",
+            code="invalid_irodori_options",
+        ) from exc
+    if value < 1:
+        raise openai_error(
+            "irodori.chunk_max_chars must be >= 1.",
+            status_code=400,
+            param="irodori.chunk_max_chars",
+            code="invalid_irodori_options",
+        )
+    return value
+
+
+def _speech_text_chunks(
+    request: AudioSpeechRequest,
+    options: dict[str, Any],
+    *,
+    default_max_chars: int,
+) -> list[str]:
+    chunking = _bool_like_option(options.get("chunking", True))
+    if chunking is None:
+        raise openai_error(
+            "irodori.chunking must be a boolean.",
+            status_code=400,
+            param="irodori.chunking",
+            code="invalid_irodori_options",
+        )
+    if chunking is False:
+        return [request.input]
+    max_chars = _chunk_max_chars(options, default=default_max_chars)
+    try:
+        return split_text_for_generation(request.input, max_chars=max_chars)
+    except RuntimeRequestError as exc:
+        raise openai_error(
+            str(exc),
+            status_code=400,
+            param="irodori.chunk_max_chars",
+            code="invalid_irodori_options",
+        ) from exc
+
+
+def _distributed_chunk_seconds(
+    options: dict[str, Any],
+    chunks: list[str],
+) -> list[float | None]:
+    if "seconds" not in options:
+        return [None] * len(chunks)
+    if isinstance(options["seconds"], bool):
+        raise openai_error(
+            "irodori.seconds must be a number.",
+            status_code=400,
+            param="irodori.seconds",
+            code="invalid_irodori_options",
+        )
+    try:
+        seconds = float(options["seconds"])
+    except (TypeError, ValueError) as exc:
+        raise openai_error(
+            "irodori.seconds must be a number.",
+            status_code=400,
+            param="irodori.seconds",
+            code="invalid_irodori_options",
+        ) from exc
+    if seconds <= 0:
+        raise openai_error(
+            "irodori.seconds must be > 0.",
+            status_code=400,
+            param="irodori.seconds",
+            code="invalid_irodori_options",
+        )
+    total_chars = sum(len(chunk) for chunk in chunks)
+    if len(chunks) == 1 or total_chars == 0:
+        return [seconds]
+    remaining = seconds
+    chunk_seconds: list[float] = []
+    for chunk in chunks[:-1]:
+        value = seconds * len(chunk) / total_chars
+        chunk_seconds.append(value)
+        remaining -= value
+    chunk_seconds.append(remaining)
+    return chunk_seconds
+
+
+def _stream_chunk_generation_requests(
+    request: AudioSpeechRequest,
+    options: dict[str, Any],
+    *,
+    default_max_chars: int,
+) -> list[SpeechGenerationRequest]:
+    chunks = _speech_text_chunks(request, options, default_max_chars=default_max_chars)
+    chunk_seconds = _distributed_chunk_seconds(options, chunks)
+    requests: list[SpeechGenerationRequest] = []
+    for index, chunk in enumerate(chunks):
+        chunk_options = dict(options)
+        chunk_options["chunking"] = False
+        if "seconds" in chunk_options or chunk_seconds[index] is not None:
+            chunk_options["seconds"] = chunk_seconds[index]
+        requests.append(
+            _speech_generation_request(
+                request,
+                input_text=chunk,
+                irodori_options=chunk_options,
+            )
+        )
+    return requests
+
+
+def _runtime_default_text_max_length(runtime: SpeechRuntime) -> int:
+    config = getattr(runtime, "config", None)
+    value = getattr(config, "text_max_length", 256)
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 256
+
+
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    return (
+        f"event: {event}\n"
+        f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    )
+
+
+def _sse_error_event(message: str, *, code: str, param: str | None = None) -> str:
+    return _sse_event(
+        "error",
+        {
+            "error": {
+                "message": message,
+                "type": "server_error"
+                if code in {"runtime_unavailable", "synthesis_queue_timeout"}
+                else "invalid_request_error",
+                "param": param,
+                "code": code,
+            }
+        },
+    )
+
+
+def _sse_openai_error_event(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, dict) and isinstance(detail.get("error"), dict):
+        error = detail["error"]
+        message = str(error.get("message", "Stream failed."))
+        code = str(error.get("code") or "stream_error")
+        param = error.get("param")
+        return _sse_error_event(
+            message,
+            code=code,
+            param=param if isinstance(param, str) else None,
+        )
+    return _sse_error_event(str(detail), code="stream_error")
+
+
 def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None = None) -> FastAPI:
     speech_runtime = runtime if runtime is not None else create_default_runtime()
     server_configuration_error: ServerConfigurationError | None = None
@@ -814,35 +1042,13 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                 param=param,
                 code="unsupported_streaming",
             )
-        if request.model not in speech_runtime.list_models():
-            raise openai_error(
-                f"Model '{request.model}' is not available.",
-                status_code=404,
-                param="model",
-                code="model_not_found",
-            )
-        try:
-            ensure_response_format_available(request.response_format)
-        except AudioConversionError as exc:
-            status_code = 400 if exc.code == "unsupported_response_format" else 503
-            raise openai_error(
-                str(exc),
-                status_code=status_code,
-                error_type="server_error" if status_code >= 500 else "invalid_request_error",
-                param="response_format",
-                code=exc.code,
-            ) from exc
-        irodori_options = _apply_short_managed_reference_auto_seconds(
+        _ensure_requested_model(speech_runtime, request.model)
+        _ensure_requested_response_format(request.response_format)
+        irodori_options = _request_irodori_options(request, voice_registry)
+        generation_request = _speech_generation_request(
             request,
-            _apply_managed_voice_reference(request, voice_registry),
-        )
-        generation_request = SpeechGenerationRequest(
-            model=request.model,
-            input=request.input,
-            voice=_runtime_voice_from_request(request.voice),
-            response_format="wav",
-            speed=request.speed,
-            irodori=irodori_options,
+            input_text=request.input,
+            irodori_options=irodori_options,
         )
         try:
             async with synthesis_limiter.slot():
@@ -884,5 +1090,102 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             ) from exc
 
         return Response(content=converted_result.audio, media_type=converted_result.media_type)
+
+    @app.post("/v1/audio/speech/stream-chunks", tags=["openai"])
+    async def stream_speech_chunks(
+        api_request: Request, request: AudioSpeechRequest
+    ) -> StreamingResponse:
+        if server_configuration_error is not None:
+            raise _server_configuration_error(server_configuration_error.message)
+        _require_bearer_auth(server_config, api_request)
+        _ensure_requested_model(speech_runtime, request.model)
+        _ensure_requested_response_format(request.response_format)
+        irodori_options = _request_irodori_options(request, voice_registry)
+        chunk_requests = _stream_chunk_generation_requests(
+            request,
+            irodori_options,
+            default_max_chars=_runtime_default_text_max_length(speech_runtime),
+        )
+        async def events() -> AsyncIterator[str]:
+            queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=1)
+
+            async def produce_events() -> None:
+                completed = 0
+                try:
+                    async with synthesis_limiter.slot():
+                        for index, chunk_request in enumerate(chunk_requests):
+                            result = await run_in_threadpool(
+                                speech_runtime.generate_speech, chunk_request
+                            )
+                            converted_result: SpeechGenerationResult = await run_in_threadpool(
+                                convert_audio_response, result, request.response_format
+                            )
+                            completed += 1
+                            await queue.put(
+                                _sse_event(
+                                    "audio_chunk",
+                                    {
+                                        "index": index,
+                                        "text": chunk_request.input,
+                                        "format": request.response_format,
+                                        "media_type": converted_result.media_type,
+                                        "audio_base64": base64.b64encode(
+                                            converted_result.audio
+                                        ).decode("ascii"),
+                                    },
+                                )
+                            )
+                except HTTPException as exc:
+                    await queue.put(_sse_openai_error_event(exc))
+                    return
+                except RuntimeRequestError as exc:
+                    logger.warning(
+                        "stream_generation_failed code=invalid_irodori_options error=%s",
+                        exc,
+                    )
+                    await queue.put(
+                        _sse_error_event(
+                            str(exc),
+                            code="invalid_irodori_options",
+                            param="irodori",
+                        )
+                    )
+                    return
+                except RuntimeUnavailableError as exc:
+                    logger.error("stream_generation_failed code=runtime_unavailable error=%s", exc)
+                    await queue.put(_sse_error_event(str(exc), code="runtime_unavailable"))
+                    return
+                except AudioConversionError as exc:
+                    logger.warning(
+                        "stream_generation_failed code=%s response_format=%s error=%s",
+                        exc.code,
+                        request.response_format,
+                        exc,
+                    )
+                    await queue.put(
+                        _sse_error_event(str(exc), code=exc.code, param="response_format")
+                    )
+                    return
+                else:
+                    await queue.put(_sse_event("done", {"chunks": completed}))
+                finally:
+                    await queue.put(None)
+
+            producer = asyncio.create_task(produce_events())
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    yield event
+            finally:
+                if not producer.done():
+                    producer.cancel()
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return app
