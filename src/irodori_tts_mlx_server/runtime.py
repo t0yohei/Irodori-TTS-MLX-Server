@@ -34,6 +34,9 @@ LORA_ADAPTER_OPTION = "lora_adapter"
 DEFAULT_CODEC_ARTIFACT_REPO = "t0yohei/Irodori-TTS-MLX-DACVAE-Codec"
 MLX_CODEC_RUNTIME_MODES = {"mlx", "mlx-decode", "mlx-decode-subprocess"}
 MANAGED_REFERENCE_CACHE_OPTION = "_managed_reference_cache"
+DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS = 12
+DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS = 40
+DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS = 120
 logger = logging.getLogger("irodori_tts_mlx_server.runtime")
 
 
@@ -517,11 +520,34 @@ def _managed_reference_cache_info(options: dict[str, Any]) -> ManagedReferenceCa
     )
 
 
-def split_text_for_generation(text: str, *, max_chars: int) -> list[str]:
+def split_text_for_generation(
+    text: str,
+    *,
+    max_chars: int,
+    chunk_mode: str = "max_chars",
+    chunk_min_chars: int = DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS,
+    chunk_target_chars: int = DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS,
+    chunk_hard_max_chars: int = DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS,
+) -> list[str]:
     """Split long text on natural boundaries before falling back to hard slices."""
 
+    if chunk_mode not in {"max_chars", "punctuation"}:
+        raise RuntimeRequestError("irodori.chunk_mode must be one of 'max_chars', 'punctuation'.")
     if max_chars < 1:
         raise RuntimeRequestError("irodori.chunk_max_chars must be >= 1.")
+    if chunk_min_chars < 0:
+        raise RuntimeRequestError("irodori.chunk_min_chars must be >= 0.")
+    if chunk_target_chars < 1:
+        raise RuntimeRequestError("irodori.chunk_target_chars must be >= 1.")
+    if chunk_hard_max_chars < 1:
+        raise RuntimeRequestError("irodori.chunk_hard_max_chars must be >= 1.")
+    if chunk_mode == "punctuation":
+        return _split_text_by_punctuation_plan(
+            text,
+            min_chars=chunk_min_chars,
+            target_chars=chunk_target_chars,
+            hard_max_chars=min(chunk_hard_max_chars, max_chars),
+        )
     if len(text) <= max_chars:
         return [text]
 
@@ -539,6 +565,50 @@ def split_text_for_generation(text: str, *, max_chars: int) -> list[str]:
     if current:
         chunks.extend(_split_overlong_segment(current, max_chars=max_chars))
     return [chunk for chunk in chunks if chunk]
+
+
+def _split_text_by_punctuation_plan(
+    text: str,
+    *,
+    min_chars: int,
+    target_chars: int,
+    hard_max_chars: int,
+) -> list[str]:
+    if len(text) <= target_chars and len(text) <= hard_max_chars:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for segment in _iter_punctuation_segments(text):
+        if len(segment) > hard_max_chars:
+            if current:
+                chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
+                current = ""
+            chunks.extend(
+                _split_overlong_segment(_lstrip_non_whitespace(segment), max_chars=hard_max_chars)
+            )
+            continue
+
+        candidate_length = len(current) + len(segment)
+        if not current:
+            current = segment
+            continue
+        if candidate_length <= hard_max_chars and (
+            len(current) < min_chars or candidate_length <= target_chars
+        ):
+            current += segment
+            continue
+
+        chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
+        current = _lstrip_non_whitespace(segment)
+
+    if current:
+        chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
+    return [chunk for chunk in chunks if chunk]
+
+
+def _lstrip_non_whitespace(text: str) -> str:
+    return text if text.strip() == "" else text.lstrip()
 
 
 def _iter_punctuation_segments(text: str) -> list[str]:
@@ -823,10 +893,36 @@ class IrodoriMLXRuntimeManager:
         chunking = _bool_option(options, "chunking", default=True)
         if not chunking:
             return [request.input]
+        chunk_mode = _string_option(options, "chunk_mode", default="max_chars")
         chunk_max_chars = _int_option(
             options, "chunk_max_chars", default=self.config.text_max_length, minimum=1
         )
-        return split_text_for_generation(request.input, max_chars=chunk_max_chars)
+        chunk_min_chars = _int_option(
+            options,
+            "chunk_min_chars",
+            default=DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS,
+            minimum=0,
+        )
+        chunk_target_chars = _int_option(
+            options,
+            "chunk_target_chars",
+            default=DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS,
+            minimum=1,
+        )
+        chunk_hard_max_chars = _int_option(
+            options,
+            "chunk_hard_max_chars",
+            default=DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS,
+            minimum=1,
+        )
+        return split_text_for_generation(
+            request.input,
+            max_chars=chunk_max_chars,
+            chunk_mode=chunk_mode,
+            chunk_min_chars=chunk_min_chars,
+            chunk_target_chars=chunk_target_chars,
+            chunk_hard_max_chars=chunk_hard_max_chars,
+        )
 
     def _chunk_seconds(self, options: dict[str, Any], chunks: list[str]) -> list[float | None]:
         seconds = _float_option(options, "seconds", default=None)

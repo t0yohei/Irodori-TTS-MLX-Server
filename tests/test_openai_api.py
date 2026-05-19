@@ -910,8 +910,14 @@ def test_managed_voice_auto_seconds_preserves_explicit_seconds(tmp_path) -> None
     "input_text,irodori",
     [
         ("これは短文ですが品質プリセットなので自動秒数を使いません。", {"preset": "balanced"}),
-        ("長めの文章では過度な短縮で末尾が切れる可能性があるため自動秒数を使いません。" * 3, {"preset": "fast"}),
-        ("速度指定がある場合はduration_scaleとの二重制御を避けます。", {"preset": "fast", "duration_scale": 0.9}),
+        (
+            "長めの文章では過度な短縮で末尾が切れる可能性があるため自動秒数を使いません。" * 3,
+            {"preset": "fast"},
+        ),
+        (
+            "速度指定がある場合はduration_scaleとの二重制御を避けます。",
+            {"preset": "fast", "duration_scale": 0.9},
+        ),
     ],
 )
 def test_managed_voice_auto_seconds_gating_noops(tmp_path, input_text, irodori) -> None:
@@ -1561,7 +1567,7 @@ def test_audio_speech_accepts_semantically_equal_bool_alias_values(
     assert runtime.requests[0].irodori == expected_irodori
 
 
-@pytest.mark.parametrize("unsupported", ["ref_latent", "chunk_min_chars"])
+@pytest.mark.parametrize("unsupported", ["ref_latent"])
 def test_audio_speech_rejects_unsupported_upstream_irodori_options(unsupported) -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
         "/v1/audio/speech",
@@ -1684,6 +1690,40 @@ def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
     assert first_chunk["media_type"] == "audio/wav"
     assert base64.b64decode(first_chunk["audio_base64"]) == wav_bytes()
     assert events[2][1] == {"chunks": 2}
+
+
+def test_audio_speech_stream_chunks_supports_punctuation_chunk_mode() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech/stream-chunks",
+        headers={"accept": "text/event-stream"},
+        json={
+            "model": "irodori-tts-mlx",
+            "input": (
+                "こんにちは。これは stream chunks の動作確認です。"
+                "最初の音声が返ったら、続きの音声を生成しながら再生できます。"
+            ),
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_reference": True,
+                "chunking": True,
+                "chunk_mode": "punctuation",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert [request.input for request in runtime.requests] == [
+        "こんにちは。これは stream chunks の動作確認です。",
+        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
+    ]
+    events = sse_events(response.text)
+    assert [event for event, _data in events] == ["audio_chunk", "audio_chunk", "done"]
+    assert [data["text"] for _event, data in events[:2]] == [
+        "こんにちは。これは stream chunks の動作確認です。",
+        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
+    ]
 
 
 def test_audio_speech_stream_chunks_respects_disabled_chunking() -> None:

@@ -550,6 +550,39 @@ def test_split_text_for_generation_falls_back_to_hard_slices() -> None:
     ]
 
 
+def test_split_text_for_generation_punctuation_mode_merges_short_segments() -> None:
+    assert split_text_for_generation(
+        "こんにちは。これは stream chunks の動作確認です。最初の音声が返ったら、"
+        "続きの音声を生成しながら再生できます。",
+        max_chars=256,
+        chunk_mode="punctuation",
+    ) == [
+        "こんにちは。これは stream chunks の動作確認です。",
+        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
+    ]
+
+
+def test_split_text_for_generation_punctuation_mode_hard_splits_unbroken_text() -> None:
+    assert split_text_for_generation(
+        "abcdefghijklmnopqrstuvwxyz",
+        max_chars=10,
+        chunk_mode="punctuation",
+        chunk_hard_max_chars=10,
+    ) == [
+        "abcdefghij",
+        "klmnopqrst",
+        "uvwxyz",
+    ]
+
+
+def test_split_text_for_generation_punctuation_mode_preserves_whitespace_only_chunks() -> None:
+    assert split_text_for_generation(
+        "      ",
+        max_chars=2,
+        chunk_mode="punctuation",
+    ) == ["  ", "  ", "  "]
+
+
 def test_mlx_runtime_manager_chunks_long_text_and_concatenates_wav_output() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
@@ -600,6 +633,65 @@ def test_mlx_runtime_manager_distributes_explicit_seconds_across_chunks() -> Non
 
     assert [request.text for request in WaveMLXRuntime.instances[0].requests] == ["abcde", "fghij"]
     assert [request.seconds for request in WaveMLXRuntime.instances[0].requests] == [2.0, 2.0]
+
+
+def test_mlx_runtime_manager_supports_punctuation_chunk_mode() -> None:
+    WaveMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(
+            text_max_length=256,
+        ),
+        runtime_factory=WaveMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input=(
+                "こんにちは。これは stream chunks の動作確認です。"
+                "最初の音声が返ったら、続きの音声を生成しながら再生できます。"
+            ),
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={"no_reference": True, "chunk_mode": "punctuation"},
+        )
+    )
+
+    assert [request.text for request in WaveMLXRuntime.instances[0].requests] == [
+        "こんにちは。これは stream chunks の動作確認です。",
+        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
+    ]
+
+
+def test_mlx_runtime_manager_clamps_punctuation_chunks_to_text_max_length() -> None:
+    WaveMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(
+            text_max_length=8,
+        ),
+        runtime_factory=WaveMLXRuntime,
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="abcdefghijklmnopqrstuvwxyz",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={"no_reference": True, "chunk_mode": "punctuation"},
+        )
+    )
+
+    assert [request.text for request in WaveMLXRuntime.instances[0].requests] == [
+        "abcdefgh",
+        "ijklmnop",
+        "qrstuvwx",
+        "yz",
+    ]
 
 
 def test_mlx_runtime_manager_can_disable_chunking() -> None:
