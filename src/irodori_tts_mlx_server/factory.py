@@ -24,6 +24,9 @@ from irodori_tts_mlx_server.audio import (
     ensure_response_format_available,
 )
 from irodori_tts_mlx_server.runtime import (
+    DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS,
+    DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS,
+    DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS,
     MANAGED_REFERENCE_CACHE_OPTION,
     RuntimeRequestError,
     RuntimeUnavailableError,
@@ -151,7 +154,11 @@ TOP_LEVEL_IRODORI_ALIASES = {
     "no_context_kv_cache": "no_context_kv_cache",
     "chunking": "chunking",
     "chunking_enabled": "chunking",
+    "chunk_mode": "chunk_mode",
     "chunk_max_chars": "chunk_max_chars",
+    "chunk_min_chars": "chunk_min_chars",
+    "chunk_target_chars": "chunk_target_chars",
+    "chunk_hard_max_chars": "chunk_hard_max_chars",
 }
 
 IRODORI_OPTION_ALIASES = {
@@ -163,7 +170,6 @@ IRODORI_OPTION_ALIASES = {
 
 UNSUPPORTED_IRODORI_OPTIONS = {
     "ref_latent",
-    "chunk_min_chars",
     "min_seconds",
     "max_seconds",
     "ref_normalize_db",
@@ -649,6 +655,54 @@ def _chunk_max_chars(options: dict[str, Any], *, default: int) -> int:
     return value
 
 
+def _chunk_int_option(options: dict[str, Any], key: str, *, default: int, minimum: int) -> int:
+    raw = options.get(key, default)
+    param = f"irodori.{key}"
+    if isinstance(raw, bool):
+        raise openai_error(
+            f"{param} must be an integer.",
+            status_code=400,
+            param=param,
+            code="invalid_irodori_options",
+        )
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise openai_error(
+            f"{param} must be an integer.",
+            status_code=400,
+            param=param,
+            code="invalid_irodori_options",
+        ) from exc
+    if value < minimum:
+        raise openai_error(
+            f"{param} must be >= {minimum}.",
+            status_code=400,
+            param=param,
+            code="invalid_irodori_options",
+        )
+    return value
+
+
+def _chunk_mode(options: dict[str, Any]) -> str:
+    raw = options.get("chunk_mode", "max_chars")
+    if not isinstance(raw, str):
+        raise openai_error(
+            "irodori.chunk_mode must be a string.",
+            status_code=400,
+            param="irodori.chunk_mode",
+            code="invalid_irodori_options",
+        )
+    if raw not in {"max_chars", "punctuation"}:
+        raise openai_error(
+            "irodori.chunk_mode must be one of 'max_chars', 'punctuation'.",
+            status_code=400,
+            param="irodori.chunk_mode",
+            code="invalid_irodori_options",
+        )
+    return raw
+
+
 def _speech_text_chunks(
     request: AudioSpeechRequest,
     options: dict[str, Any],
@@ -665,9 +719,35 @@ def _speech_text_chunks(
         )
     if chunking is False:
         return [request.input]
+    chunk_mode = _chunk_mode(options)
     max_chars = _chunk_max_chars(options, default=default_max_chars)
+    min_chars = _chunk_int_option(
+        options,
+        "chunk_min_chars",
+        default=DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS,
+        minimum=0,
+    )
+    target_chars = _chunk_int_option(
+        options,
+        "chunk_target_chars",
+        default=DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS,
+        minimum=1,
+    )
+    hard_max_chars = _chunk_int_option(
+        options,
+        "chunk_hard_max_chars",
+        default=DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS,
+        minimum=1,
+    )
     try:
-        return split_text_for_generation(request.input, max_chars=max_chars)
+        return split_text_for_generation(
+            request.input,
+            max_chars=max_chars,
+            chunk_mode=chunk_mode,
+            chunk_min_chars=min_chars,
+            chunk_target_chars=target_chars,
+            chunk_hard_max_chars=hard_max_chars,
+        )
     except RuntimeRequestError as exc:
         raise openai_error(
             str(exc),
@@ -754,8 +834,7 @@ def _runtime_default_text_max_length(runtime: SpeechRuntime) -> int:
 
 def _sse_event(event: str, data: dict[str, Any]) -> str:
     return (
-        f"event: {event}\n"
-        f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
     )
 
 
@@ -1106,6 +1185,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             irodori_options,
             default_max_chars=_runtime_default_text_max_length(speech_runtime),
         )
+
         async def events() -> AsyncIterator[str]:
             queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=1)
 

@@ -242,13 +242,15 @@ Supported `irodori` runtime options include `reference_wav`, `no_reference`,
 `caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,
 `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`,
 `cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, `no_context_kv_cache`,
-`chunking`, `chunk_max_chars`, `tail_trim_ms`, `tail_silence_trim_ms`,
-`tail_silence_keep_ms`, and `tail_silence_threshold`.
+`chunking`, `chunk_mode`, `chunk_max_chars`, `chunk_min_chars`,
+`chunk_target_chars`, `chunk_hard_max_chars`, `tail_trim_ms`,
+`tail_silence_trim_ms`, `tail_silence_keep_ms`, and
+`tail_silence_threshold`.
 The upstream `irodori` aliases `ref_wav`, `no_ref`, `max_ref_seconds`,
 `context_kv_cache`, and `chunking_enabled` are also accepted when they map
 cleanly to the MLX runtime. Unsupported or ambiguous upstream options such as
-`lora_adapter`, `ref_latent`, `chunk_min_chars`, and PyTorch schedule-specific
-controls are rejected instead of being silently ignored.
+`lora_adapter`, `ref_latent`, and PyTorch schedule-specific controls are
+rejected instead of being silently ignored.
 When `duration_scale` is omitted, OpenAI `speed` maps to
 `duration_scale=1/speed`.
 
@@ -267,6 +269,10 @@ English punctuation before falling back to hard character slices, using
 omitted, each chunk also omits `seconds` so Irodori-TTS-MLX can use its duration
 fallback or predicted-duration behavior. When `irodori.seconds` is explicit, the
 server distributes that total duration across chunks by character count.
+Set `irodori.chunk_mode="punctuation"` to use punctuation-oriented automatic
+chunk planning without manually tuning `chunk_max_chars`. In that mode,
+`chunk_min_chars`, `chunk_target_chars`, and `chunk_hard_max_chars` control
+short-segment merging, the preferred chunk size, and the hard fallback split.
 
 For lower perceived latency, `POST /v1/audio/speech/stream-chunks` exposes an
 Irodori-specific Server-Sent Events extension. It reuses the same speech request
