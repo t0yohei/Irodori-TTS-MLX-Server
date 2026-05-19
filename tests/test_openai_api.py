@@ -1282,6 +1282,61 @@ def test_audio_speech_zero_queue_timeout_rejects_when_queue_is_full() -> None:
     assert first_status == {"status_code": 200}
 
 
+def test_audio_speech_stream_chunks_returns_queue_timeout_before_streaming() -> None:
+    runtime = BlockingSpeechRuntime()
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            config=ServerConfig(max_concurrent_synthesis=1, queue_timeout_seconds=0.01),
+        )
+    )
+    payload = {
+        "model": "irodori-tts-mlx",
+        "input": "hello. goodbye.",
+        "voice": "voicedesign",
+        "response_format": "wav",
+        "irodori": {"no_reference": True, "chunking": True, "chunk_max_chars": 8},
+    }
+    first_status: dict[str, int] = {}
+
+    def first_request() -> None:
+        first_status["status_code"] = client.post(
+            "/v1/audio/speech/stream-chunks",
+            headers={"accept": "text/event-stream"},
+            json=payload,
+        ).status_code
+
+    thread = threading.Thread(target=first_request)
+    thread.start()
+    assert runtime.started.wait(timeout=2)
+    try:
+        response = client.post(
+            "/v1/audio/speech/stream-chunks",
+            headers={"accept": "text/event-stream"},
+            json=payload,
+        )
+    finally:
+        runtime.release.set()
+        thread.join(timeout=2)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert sse_events(response.text) == [
+        (
+            "error",
+            {
+                "error": {
+                    "message": "Synthesis queue is full or the model is still loading; retry later.",
+                    "type": "server_error",
+                    "param": None,
+                    "code": "synthesis_queue_timeout",
+                }
+            },
+        )
+    ]
+    assert first_status == {"status_code": 200}
+
+
 def test_audio_speech_allows_configured_concurrent_synthesis() -> None:
     class SleepingRuntime(MockSpeechRuntime):
         def generate_speech(self, request: SpeechGenerationRequest) -> SpeechGenerationResult:

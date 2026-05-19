@@ -276,8 +276,7 @@ class SynthesisLimiter:
         self._queue_timeout_seconds = queue_timeout_seconds
         self._logger = log
 
-    @asynccontextmanager
-    async def slot(self) -> AsyncIterator[None]:
+    async def acquire(self) -> None:
         try:
             if self._queue_timeout_seconds == 0:
                 if self._semaphore.locked():
@@ -298,10 +297,17 @@ class SynthesisLimiter:
                 error_type="server_error",
                 code="synthesis_queue_timeout",
             ) from exc
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+    @asynccontextmanager
+    async def slot(self) -> AsyncIterator[None]:
+        await self.acquire()
         try:
             yield
         finally:
-            self._semaphore.release()
+            self.release()
 
 
 VOICE_UPLOAD_MULTIPART_OVERHEAD_BYTES = 64 * 1024
@@ -759,12 +765,29 @@ def _sse_error_event(message: str, *, code: str, param: str | None = None) -> st
         {
             "error": {
                 "message": message,
-                "type": "server_error" if code == "runtime_unavailable" else "invalid_request_error",
+                "type": "server_error"
+                if code in {"runtime_unavailable", "synthesis_queue_timeout"}
+                else "invalid_request_error",
                 "param": param,
                 "code": code,
             }
         },
     )
+
+
+def _sse_openai_error_event(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, dict) and isinstance(detail.get("error"), dict):
+        error = detail["error"]
+        message = str(error.get("message", "Stream failed."))
+        code = str(error.get("code") or "stream_error")
+        param = error.get("param")
+        return _sse_error_event(
+            message,
+            code=code,
+            param=param if isinstance(param, str) else None,
+        )
+    return _sse_error_event(str(detail), code="stream_error")
 
 
 def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None = None) -> FastAPI:
@@ -1083,53 +1106,81 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             irodori_options,
             default_max_chars=_runtime_default_text_max_length(speech_runtime),
         )
-
         async def events() -> AsyncIterator[str]:
-            completed = 0
+            queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=1)
+
+            async def produce_events() -> None:
+                completed = 0
+                try:
+                    async with synthesis_limiter.slot():
+                        for index, chunk_request in enumerate(chunk_requests):
+                            result = await run_in_threadpool(
+                                speech_runtime.generate_speech, chunk_request
+                            )
+                            converted_result: SpeechGenerationResult = await run_in_threadpool(
+                                convert_audio_response, result, request.response_format
+                            )
+                            completed += 1
+                            await queue.put(
+                                _sse_event(
+                                    "audio_chunk",
+                                    {
+                                        "index": index,
+                                        "text": chunk_request.input,
+                                        "format": request.response_format,
+                                        "media_type": converted_result.media_type,
+                                        "audio_base64": base64.b64encode(
+                                            converted_result.audio
+                                        ).decode("ascii"),
+                                    },
+                                )
+                            )
+                except HTTPException as exc:
+                    await queue.put(_sse_openai_error_event(exc))
+                    return
+                except RuntimeRequestError as exc:
+                    logger.warning(
+                        "stream_generation_failed code=invalid_irodori_options error=%s",
+                        exc,
+                    )
+                    await queue.put(
+                        _sse_error_event(
+                            str(exc),
+                            code="invalid_irodori_options",
+                            param="irodori",
+                        )
+                    )
+                    return
+                except RuntimeUnavailableError as exc:
+                    logger.error("stream_generation_failed code=runtime_unavailable error=%s", exc)
+                    await queue.put(_sse_error_event(str(exc), code="runtime_unavailable"))
+                    return
+                except AudioConversionError as exc:
+                    logger.warning(
+                        "stream_generation_failed code=%s response_format=%s error=%s",
+                        exc.code,
+                        request.response_format,
+                        exc,
+                    )
+                    await queue.put(
+                        _sse_error_event(str(exc), code=exc.code, param="response_format")
+                    )
+                    return
+                else:
+                    await queue.put(_sse_event("done", {"chunks": completed}))
+                finally:
+                    await queue.put(None)
+
+            producer = asyncio.create_task(produce_events())
             try:
-                async with synthesis_limiter.slot():
-                    for index, chunk_request in enumerate(chunk_requests):
-                        result = await run_in_threadpool(
-                            speech_runtime.generate_speech, chunk_request
-                        )
-                        converted_result: SpeechGenerationResult = await run_in_threadpool(
-                            convert_audio_response, result, request.response_format
-                        )
-                        completed += 1
-                        yield _sse_event(
-                            "audio_chunk",
-                            {
-                                "index": index,
-                                "text": chunk_request.input,
-                                "format": request.response_format,
-                                "media_type": converted_result.media_type,
-                                "audio_base64": base64.b64encode(
-                                    converted_result.audio
-                                ).decode("ascii"),
-                            },
-                        )
-            except RuntimeRequestError as exc:
-                logger.warning("stream_generation_failed code=invalid_irodori_options error=%s", exc)
-                yield _sse_error_event(
-                    str(exc),
-                    code="invalid_irodori_options",
-                    param="irodori",
-                )
-                return
-            except RuntimeUnavailableError as exc:
-                logger.error("stream_generation_failed code=runtime_unavailable error=%s", exc)
-                yield _sse_error_event(str(exc), code="runtime_unavailable")
-                return
-            except AudioConversionError as exc:
-                logger.warning(
-                    "stream_generation_failed code=%s response_format=%s error=%s",
-                    exc.code,
-                    request.response_format,
-                    exc,
-                )
-                yield _sse_error_event(str(exc), code=exc.code, param="response_format")
-                return
-            yield _sse_event("done", {"chunks": completed})
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    yield event
+            finally:
+                if not producer.done():
+                    producer.cancel()
 
         return StreamingResponse(
             events(),
