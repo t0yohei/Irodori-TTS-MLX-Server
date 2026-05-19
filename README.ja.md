@@ -120,13 +120,17 @@ synthesis streaming を行いません。`stream=true`, `stream_format`,
 `Accept: text/event-stream` を送ると `unsupported_streaming` エラーを返します。
 
 よく使う `irodori` option は `no_reference`, `caption`, `preset`, `seconds`,
-`duration_scale`, `num_steps`, `seed`, `chunking`, `chunk_max_chars`,
-`tail_trim_ms`, `tail_silence_trim_ms` です。OpenAI の `speed` は
+`duration_scale`, `num_steps`, `seed`, `chunking_enabled`,
+`punctuation_chunking_enabled`, `chunk_min_chars`, `tail_trim_ms`,
+`tail_silence_trim_ms` です。OpenAI の `speed` は
 `duration_scale` 未指定時に `duration_scale=1/speed` として扱います。
 `preset` は `ultra-fast`, `fast`, `balanced`, `quality` を受け付け、それぞれ
 8, 12, 24, 40 sampling steps に対応します。`ultra-fast` は、`seconds` と
 `duration_scale` が未指定かつ `speed=1.0` の場合、対応する Irodori-TTS-MLX
 runtime に短文向け auto-duration cap も渡します。
+古い `chunking`, `chunk_mode`, per-request chunk-size 系 option は互換用
+alias として受け付けますが、新しい client では `chunking_enabled`,
+`punctuation_chunking_enabled`, `chunk_min_chars` を使ってください。
 管理対象 reference voice の短文リクエストで `fast` または `ultra-fast` を使い、
 `seconds` と `duration_scale` を省略し `speed=1.0` のままにした場合、サーバーは
 保守的な文字数ベースの `seconds` 推定値を自動設定します。低遅延応答で明らかな
@@ -143,7 +147,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"落ち着いた明瞭なナレーション","chunking":true,"chunk_max_chars":80}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"落ち着いた明瞭なナレーション","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
 ```
 
 ```text

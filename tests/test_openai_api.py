@@ -1301,7 +1301,7 @@ def test_audio_speech_stream_chunks_returns_queue_timeout_before_streaming() -> 
         "input": "hello. goodbye.",
         "voice": "voicedesign",
         "response_format": "wav",
-        "irodori": {"no_reference": True, "chunking": True, "chunk_max_chars": 8},
+        "irodori": {"no_reference": True},
     }
     first_status: dict[str, int] = {}
 
@@ -1494,7 +1494,7 @@ def test_audio_speech_accepts_upstream_style_top_level_option_aliases() -> None:
         "cfg_max_t": 0.8,
         "max_reference_seconds": 12.0,
         "no_context_kv_cache": True,
-        "chunking": False,
+        "chunking_enabled": False,
     }
 
 
@@ -1523,7 +1523,7 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases(tmp_path) ->
     assert response.status_code == 200
     assert runtime.requests[0].irodori["max_reference_seconds"] == 10
     assert runtime.requests[0].irodori["no_context_kv_cache"] is False
-    assert runtime.requests[0].irodori["chunking"] is False
+    assert runtime.requests[0].irodori["chunking_enabled"] is False
     assert_managed_reference_options(
         runtime.requests[0].irodori,
         path=str(tmp_path / "reference.wav"),
@@ -1543,8 +1543,8 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases(tmp_path) ->
             {"no_context_kv_cache": False},
         ),
         (
-            {"chunking_enabled": False, "irodori": {"chunking": "false"}},
-            {"chunking": False},
+            {"chunking_enabled": False, "irodori": {"chunking_enabled": "false"}},
+            {"chunking_enabled": False},
         ),
     ],
 )
@@ -1632,8 +1632,7 @@ def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
             "response_format": "wav",
             "irodori": {
                 "no_reference": True,
-                "chunking": True,
-                "chunk_max_chars": 8,
+                "chunking_enabled": True,
                 "tail_trim_ms": 20,
                 "tail_silence_trim_ms": 120,
                 "tail_silence_keep_ms": 40,
@@ -1645,8 +1644,7 @@ def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
     assert response.status_code == 200
     assert runtime.requests[0].irodori == {
         "no_reference": True,
-        "chunking": True,
-        "chunk_max_chars": 8,
+        "chunking_enabled": True,
         "tail_trim_ms": 20,
         "tail_silence_trim_ms": 120,
         "tail_silence_keep_ms": 40,
@@ -1654,11 +1652,10 @@ def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
     }
 
 
-def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
+def test_audio_speech_accepts_legacy_chunking_controls() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
-        "/v1/audio/speech/stream-chunks",
-        headers={"accept": "text/event-stream"},
+        "/v1/audio/speech",
         json={
             "model": "irodori-tts-mlx",
             "input": "hello. goodbye.",
@@ -1668,6 +1665,29 @@ def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
                 "no_reference": True,
                 "chunking": True,
                 "chunk_max_chars": 8,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[0].irodori["chunking_enabled"] is True
+    assert runtime.requests[0].irodori["chunk_max_chars"] == 8
+
+
+def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech/stream-chunks",
+        headers={"accept": "text/event-stream"},
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "こんにちは。さようなら。",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_reference": True,
+                "chunking_enabled": True,
+                "punctuation_chunking_enabled": True,
                 "seconds": 3.0,
             },
         },
@@ -1675,24 +1695,24 @@ def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert [request.input for request in runtime.requests] == ["hello.", "goodbye."]
-    assert [request.irodori["chunking"] for request in runtime.requests] == [False, False]
+    assert [request.input for request in runtime.requests] == ["こんにちは。", "さようなら。"]
+    assert [request.irodori["chunking_enabled"] for request in runtime.requests] == [False, False]
     assert [round(request.irodori["seconds"], 4) for request in runtime.requests] == [
-        1.2857,
-        1.7143,
+        1.5,
+        1.5,
     ]
     events = sse_events(response.text)
     assert [event for event, _data in events] == ["audio_chunk", "audio_chunk", "done"]
     first_chunk = events[0][1]
     assert first_chunk["index"] == 0
-    assert first_chunk["text"] == "hello."
+    assert first_chunk["text"] == "こんにちは。"
     assert first_chunk["format"] == "wav"
     assert first_chunk["media_type"] == "audio/wav"
     assert base64.b64decode(first_chunk["audio_base64"]) == wav_bytes()
     assert events[2][1] == {"chunks": 2}
 
 
-def test_audio_speech_stream_chunks_supports_punctuation_chunk_mode() -> None:
+def test_audio_speech_stream_chunks_supports_punctuation_chunking_enabled() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech/stream-chunks",
@@ -1707,7 +1727,45 @@ def test_audio_speech_stream_chunks_supports_punctuation_chunk_mode() -> None:
             "response_format": "wav",
             "irodori": {
                 "no_reference": True,
-                "chunking": True,
+                "chunking_enabled": True,
+                "punctuation_chunking_enabled": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert [request.input for request in runtime.requests] == [
+        "こんにちは。",
+        "これは stream chunks の動作確認です。",
+        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
+    ]
+    events = sse_events(response.text)
+    assert [event for event, _data in events] == [
+        "audio_chunk",
+        "audio_chunk",
+        "audio_chunk",
+        "done",
+    ]
+    assert [data["text"] for _event, data in events[:3]] == [
+        "こんにちは。",
+        "これは stream chunks の動作確認です。",
+        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
+    ]
+
+
+def test_audio_speech_stream_chunks_keeps_legacy_punctuation_chunk_mode() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech/stream-chunks",
+        headers={"accept": "text/event-stream"},
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "こんにちは。互換性テストです。",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_reference": True,
+                "chunking_enabled": True,
                 "chunk_mode": "punctuation",
             },
         },
@@ -1715,15 +1773,35 @@ def test_audio_speech_stream_chunks_supports_punctuation_chunk_mode() -> None:
 
     assert response.status_code == 200
     assert [request.input for request in runtime.requests] == [
-        "こんにちは。これは stream chunks の動作確認です。",
-        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
+        "こんにちは。",
+        "互換性テストです。",
     ]
-    events = sse_events(response.text)
-    assert [event for event, _data in events] == ["audio_chunk", "audio_chunk", "done"]
-    assert [data["text"] for _event, data in events[:2]] == [
-        "こんにちは。これは stream chunks の動作確認です。",
-        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
-    ]
+
+
+def test_audio_speech_rejects_conflicting_punctuation_chunk_options() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech/stream-chunks",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "こんにちは。互換性テストです。",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_reference": True,
+                "chunking_enabled": True,
+                "punctuation_chunking_enabled": False,
+                "chunk_mode": "punctuation",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert (
+        response.json()["error"]["message"]
+        == "irodori.punctuation_chunking_enabled conflicts with irodori.chunk_mode."
+    )
+    assert runtime.requests == []
 
 
 def test_audio_speech_stream_chunks_respects_disabled_chunking() -> None:
@@ -1737,8 +1815,7 @@ def test_audio_speech_stream_chunks_respects_disabled_chunking() -> None:
             "response_format": "wav",
             "irodori": {
                 "no_reference": True,
-                "chunking": False,
-                "chunk_max_chars": 8,
+                "chunking_enabled": False,
             },
         },
     )

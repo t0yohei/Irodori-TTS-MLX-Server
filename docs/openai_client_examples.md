@@ -151,14 +151,14 @@ curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \\
   -H 'Authorization: Bearer <token>' \\
   -d '{
     "model": "irodori-tts-mlx",
-    "input": "First sentence. Second sentence.",
+    "input": "最初の文です。次の文です。",
     "voice": "voicedesign",
     "response_format": "wav",
     "irodori": {
       "no_reference": true,
       "caption": "clear studio narration",
-      "chunking": true,
-      "chunk_max_chars": 80
+      "chunking_enabled": true,
+      "punctuation_chunking_enabled": true
     }
   }'
 ~~~
