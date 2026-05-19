@@ -12,6 +12,8 @@ Irodori-TTS-MLX で実装・検証済みの機能に絞った Apple Silicon 向�
 - `GET /health`
 - `GET /v1/models`
 - `POST /v1/audio/speech`
+- Irodori 固有の chunk-level Server-Sent Events 用
+  `POST /v1/audio/speech/stream-chunks`
 - `/v1/audio/voices` 配下の `GET`, `POST`, `GET by id`, `PUT`, `DELETE`
 
 モデル重みを設定しなくてもパッケージは import できます。その場合、`/health` は
@@ -24,7 +26,8 @@ Irodori-TTS-MLX で実装・検証済みの機能に絞った Apple Silicon 向�
 - [docs/real_model_setup.md](docs/real_model_setup.md): 初回セットアップ、変換済み
   weights layout、ローカル起動、speech smoke、よくあるエラー。
 - [docs/openai_client_examples.md](docs/openai_client_examples.md): `curl` と Python
-  OpenAI client の例、bearer auth、FFmpeg 形式、streaming 非対応の扱い。
+  OpenAI client の例、bearer auth、FFmpeg 形式、OpenAI speech streaming 非対応の扱い、
+  Irodori 固有の chunk-level SSE extension。
 - [docs/deployment.md](docs/deployment.md): Apple Silicon ローカル運用、launchd、
   bearer auth、queue、health check、ログ、環境変数。
 - [docs/upstream_compatibility.md](docs/upstream_compatibility.md): upstream server
@@ -112,8 +115,9 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 ```
 
 `wav` と `pcm` は追加エンコーダなしで使えます。`mp3`, `flac`, `opus`, `aac` は
-サーバーホストに FFmpeg が必要です。streaming synthesis / SSE は未対応で、
-`unsupported_streaming` エラーを返します。
+サーバーホストに FFmpeg が必要です。OpenAI 互換の `/v1/audio/speech` route は
+synthesis streaming を行いません。`stream=true`, `stream_format`,
+`Accept: text/event-stream` を送ると `unsupported_streaming` エラーを返します。
 
 よく使う `irodori` option は `no_reference`, `caption`, `preset`, `seconds`,
 `duration_scale`, `num_steps`, `seed`, `chunking`, `chunk_max_chars`,
@@ -128,6 +132,31 @@ runtime に短文向け auto-duration cap も渡します。
 保守的な文字数ベースの `seconds` 推定値を自動設定します。低遅延応答で明らかな
 過生成を避けるための挙動で、長文や明示的な duration 指定は末尾切れを避けるため
 変更しません。
+
+低遅延に再生を始めたい用途向けに、Irodori 固有 extension として
+`POST /v1/audio/speech/stream-chunks` も提供します。同じ speech request 形式と
+chunking 設定を使い、生成済みのテキスト chunk ごとに `audio_chunk` event、最後に
+`done` event を Server-Sent Events で返します。
+
+```bash
+curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -H 'Authorization: Bearer <token>' \
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"落ち着いた明瞭なナレーション","chunking":true,"chunk_max_chars":80}}'
+```
+
+```text
+event: audio_chunk
+data: {"index":0,"text":"最初の文です。","format":"wav","media_type":"audio/wav","audio_base64":"..."}
+
+event: done
+data: {"chunks":1}
+```
+
+`audio_base64` には chunk 単位の完全な音声ファイルが入ります。client は各
+`audio_chunk` を decode して再生 queue に積みながら、後続 chunk の生成を待てます。
+この endpoint は OpenAI speech API の互換 contract ではなく、この server の追加機能です。
 
 ## 管理対象 reference voice
 
