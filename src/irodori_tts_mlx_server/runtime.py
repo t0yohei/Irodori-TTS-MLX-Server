@@ -640,6 +640,8 @@ def _split_text_by_punctuation_plan(
             current = []
             current_chars = 0
             pending_boundary = False
+            if char.isspace():
+                continue
 
         current.append(char)
         if not char.isspace():

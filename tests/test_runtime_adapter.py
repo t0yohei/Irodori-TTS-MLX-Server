@@ -779,6 +779,15 @@ def test_punctuation_mode_drops_boundary_whitespace_after_period() -> None:
     ) == ["こんにちは。", "次です。", "最後です。"]
 
 
+def test_punctuation_mode_ignores_boundary_whitespace_for_hard_max() -> None:
+    assert split_text_for_generation(
+        "hello. goodbye.",
+        max_chars=8,
+        chunk_mode="punctuation",
+        chunk_min_chars=1,
+    ) == ["hello.", "goodbye."]
+
+
 def test_split_text_for_generation_punctuation_mode_keeps_closers_with_period() -> None:
     assert split_text_for_generation(
         '"こんにちは。"次です。終わり。\'',
@@ -829,11 +838,9 @@ def test_mlx_runtime_manager_chunks_long_text_and_concatenates_wav_output() -> N
     )
 
     requests = WaveMLXRuntime.instances[0].requests
-    assert [request.text for request in requests] == ["hello.", "goodbye", "."]
-    assert [request.seconds for request in requests] == [None, None, None]
-    assert read_wav_samples(result.audio) == (
-        [6] * 20 + [0] * 10 + [7] * 20 + [0] * 10 + [1] * 20 + [0] * 10
-    )
+    assert [request.text for request in requests] == ["hello.", "goodbye."]
+    assert [request.seconds for request in requests] == [None, None]
+    assert read_wav_samples(result.audio) == [6] * 20 + [0] * 10 + [8] * 20 + [0] * 10
 
 
 def test_mlx_runtime_manager_distributes_explicit_seconds_across_chunks() -> None:
