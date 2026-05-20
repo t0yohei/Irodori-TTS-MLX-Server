@@ -56,8 +56,8 @@ Optional runtime and server controls:
 | `IRODORI_MLX_WEIGHTS_REVISION` | provider default | Branch, tag, or commit for hosted weights. |
 | `IRODORI_MLX_MODEL_ID` | `irodori-tts-mlx` | Model id returned by `/v1/models` and accepted by `/v1/audio/speech`. |
 | `IRODORI_MLX_PRELOAD` | unset / false | Set to `1` to load the model during startup so failures are visible before serving traffic. |
-| `IRODORI_MLX_TEXT_MAX_LENGTH` | `256` | Default long-text chunk size used by runtime request mapping. |
-| `IRODORI_MLX_CAPTION_MAX_LENGTH` | runtime default | Optional caption-token limit. |
+| `IRODORI_MLX_MAX_TEXT_LEN` | `256` | Default long-text chunk size used by runtime request mapping. |
+| `IRODORI_MLX_MAX_CAPTION_LEN` | runtime default | Optional caption-token limit. |
 | `IRODORI_MLX_CODEC_REPO` | `Aratako/Semantic-DACVAE-Japanese-32dim` | Codec repository used by the Irodori-TTS-MLX runtime. |
 | `IRODORI_MLX_CODEC_ARTIFACT_REPO` | `t0yohei/Irodori-TTS-MLX-DACVAE-Codec` | Hosted MLX DACVAE codec artifact repo used by the default MLX codec runtime when `IRODORI_MLX_CODEC_PATH` is unset. |
 | `IRODORI_MLX_CODEC_ARTIFACT_REVISION` | provider default | Optional revision for the hosted codec artifact repo. |

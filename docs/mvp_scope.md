@@ -44,7 +44,7 @@ missing encoder support, and runtime failures.
 Managed reference voice files are intentionally a small safe subset of the
 upstream voice API. The server stores uploads under `IRODORI_SERVER_VOICES_DIR`,
 accepts common audio upload extensions, resolves managed voice ids into
-`irodori.reference_wav`, and rejects arbitrary local paths, path traversal,
+`irodori.ref_wav`, and rejects arbitrary local paths, path traversal,
 remote URLs, symlinks, and latent `.pt`/`.pth` references.
 
 ## Non-Goals

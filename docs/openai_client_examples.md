@@ -31,7 +31,7 @@ curl http://127.0.0.1:8000/v1/audio/speech \
     "voice": "voicedesign",
     "response_format": "wav",
     "irodori": {
-      "no_reference": true,
+      "no_ref": true,
       "caption": "calm narration, clear diction",
       "preset": "balanced"
     }
@@ -51,7 +51,7 @@ curl http://127.0.0.1:8000/v1/audio/speech \
     "voice": "voicedesign",
     "response_format": "mp3",
     "irodori": {
-      "no_reference": true,
+      "no_ref": true,
       "caption": "bright young voice, energetic delivery",
       "preset": "fast"
     }
@@ -100,7 +100,7 @@ speech = client.audio.speech.create(
     response_format="wav",
     extra_body={
         "irodori": {
-            "no_reference": True,
+            "no_ref": True,
             "caption": "calm narration, clear diction",
             "preset": "balanced",
         }
@@ -119,7 +119,7 @@ speech = client.audio.speech.create(
     response_format="flac",
     extra_body={
         "irodori": {
-            "no_reference": True,
+            "no_ref": True,
             "caption": "clear studio narration",
             "preset": "balanced",
         }
@@ -129,7 +129,7 @@ speech.write_to_file(Path("speech.flac"))
 ~~~
 
 The OpenAI Python client does not need server-specific transport code. Use
-`extra_body` for Irodori-specific options such as `no_reference`, `caption`,
+`extra_body` for Irodori-specific options such as `no_ref`, `caption`,
 `preset`, `seed`, `num_steps`, or reference audio paths.
 
 ## Streaming
@@ -155,7 +155,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \\
     "voice": "voicedesign",
     "response_format": "wav",
     "irodori": {
-      "no_reference": true,
+      "no_ref": true,
       "caption": "clear studio narration",
       "chunking_enabled": true,
       "punctuation_chunking_enabled": true,

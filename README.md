@@ -160,11 +160,11 @@ reference voices may use `.wav`, `.flac`, `.mp3`, `.m4a`, `.ogg`,
 numbers, underscores, or hyphens. Uploaded files are stored as
 `<voice_id><extension>` inside that directory, and speech requests that set
 `voice` to a managed ID or `{"id":"<voice_id>"}` automatically receive
-`irodori.reference_wav` and `irodori.no_reference=false` unless the request
+`irodori.ref_wav` and `irodori.no_ref=false` unless the request
 already supplies explicit reference options or a no-reference option other than
 false. Upstream-style `no_ref=false` still allows managed voice resolution.
 Explicit
-`irodori.reference_wav` values are accepted only when they resolve to an
+`irodori.ref_wav` values are accepted only when they resolve to an
 existing, non-symlink managed file inside `IRODORI_SERVER_VOICES_DIR`; remote
 URLs, path traversal, and arbitrary local paths are rejected. This route does
 not resolve alias files or latent references.
@@ -222,7 +222,7 @@ Generate WAV speech once a runtime adapter is configured:
 curl http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"hello","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"calm narration, clear diction","preset":"balanced"}}' \
+  -d '{"model":"irodori-tts-mlx","input":"hello","voice":"voicedesign","response_format":"wav","irodori":{"no_ref":true,"caption":"calm narration, clear diction","preset":"balanced"}}' \
   --output speech.wav
 ```
 
@@ -238,17 +238,15 @@ setup guidance. The OpenAI-compatible `/v1/audio/speech` route does not stream
 synthesis; `stream=true`, `stream_format`, or `Accept: text/event-stream`
 requests return an OpenAI-style `unsupported_streaming` error object.
 
-Supported `irodori` runtime options include `reference_wav`, `no_reference`,
+Supported `irodori` runtime options include `ref_wav`, `no_ref`,
 `caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,
 `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`,
-`cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, `no_context_kv_cache`,
+`cfg_min_t`, `cfg_max_t`, `max_ref_seconds`, `context_kv_cache`,
 `chunking_enabled`, `punctuation_chunking_enabled`,
 `first_sentence_comma_chunking_enabled`, `chunk_min_chars`, `tail_trim_ms`,
 `tail_silence_trim_ms`, `tail_silence_keep_ms`, and `tail_silence_threshold`.
-The upstream `irodori` aliases `ref_wav`, `no_ref`, `max_ref_seconds`,
-and `context_kv_cache` are also accepted when they map cleanly to the MLX
-runtime. Unsupported or ambiguous upstream options such as
-`lora_adapter`, `ref_latent`, and PyTorch schedule-specific controls are
+Unsupported or ambiguous upstream options such as
+`lora_adapter`, `ref_latent`, legacy option names, and PyTorch schedule-specific controls are
 rejected instead of being silently ignored.
 When `duration_scale` is omitted, OpenAI `speed` maps to
 `duration_scale=1/speed`.
@@ -262,7 +260,7 @@ and cache/reload semantics.
 
 Long text chunking is enabled by default. The server splits text on punctuation
 before falling back to hard character slices, using
-`IRODORI_MLX_TEXT_MAX_LENGTH` as the hard fallback size. Set
+`IRODORI_MLX_MAX_TEXT_LEN` as the hard fallback size. Set
 `irodori.chunking_enabled=false` to send the full text to the runtime unchanged.
 When `irodori.seconds` is
 omitted, each chunk also omits `seconds` so Irodori-TTS-MLX can use its duration
@@ -286,7 +284,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"clear studio narration","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_ref":true,"caption":"clear studio narration","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
 ```
 
 ```text
@@ -309,15 +307,15 @@ that much silence is present, preserving `tail_silence_keep_ms`; the silence
 threshold defaults to `256` and can be tuned with `tail_silence_threshold`.
 
 For VoiceDesign v2 caption-conditioned hosted weights, set
-`irodori.no_reference=true` and provide a concise style caption such as
+`irodori.no_ref=true` and provide a concise style caption such as
 `"calm narration, clear diction"` or `"bright young voice, energetic delivery"`.
 `irodori.preset` accepts `ultra-fast`, `fast`, `balanced`, or `quality`, mapping
 to 8, 12, 24, or 40 sampling steps. `ultra-fast` also passes the short-prompt
 auto-duration cap supported by recent Irodori-TTS-MLX runtimes when neither
 `irodori.seconds` nor `irodori.duration_scale` is explicit and OpenAI `speed`
 remains `1.0`. An explicit `irodori.num_steps` overrides the preset. Do not set
-`irodori.reference_wav` together with `irodori.no_reference=true`; if
-`irodori.no_reference=false`, a `reference_wav` path is required.
+`irodori.ref_wav` together with `irodori.no_ref=true`; if
+`irodori.no_ref=false`, a `ref_wav` path is required.
 
 ## Validation
 
@@ -363,7 +361,7 @@ pytest -m real_mlx tests/test_real_mlx_smoke.py
 
 The test constructs the FastAPI app with the real runtime configuration, calls
 `POST /v1/audio/speech` with `voice=voicedesign`,
-`irodori.no_reference=true`, and a caption, then verifies the response is valid
+`irodori.no_ref=true`, and a caption, then verifies the response is valid
 WAV audio with non-empty PCM frames.
 
 To validate through a running local server instead of pytest:
@@ -374,7 +372,7 @@ python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000
 
 curl http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"irodori-tts-mlx","input":"こんにちは。これは実行時スモークテストです。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"落ち着いた明瞭なナレーション","preset":"fast","chunking_enabled":false}}' \
+  -d '{"model":"irodori-tts-mlx","input":"こんにちは。これは実行時スモークテストです。","voice":"voicedesign","response_format":"wav","irodori":{"no_ref":true,"caption":"落ち着いた明瞭なナレーション","preset":"fast","chunking_enabled":false}}' \
   --output /tmp/irodori-real-mlx-smoke.wav
 
 python - <<'PY'

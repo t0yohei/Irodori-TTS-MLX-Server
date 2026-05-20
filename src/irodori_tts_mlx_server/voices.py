@@ -251,7 +251,7 @@ class VoiceRegistry:
     def validate_reference_path(self, value: str) -> Path:
         parsed = urlparse(value)
         if parsed.scheme or parsed.netloc:
-            raise ValueError("irodori.reference_wav must not be a remote URL.")
+            raise ValueError("irodori.ref_wav must not be a remote URL.")
 
         root = self._existing_root()
         if root is None:
@@ -260,21 +260,21 @@ class VoiceRegistry:
         if not path.is_absolute():
             path = root / path
         if path.is_symlink():
-            raise ValueError("irodori.reference_wav must not be a symbolic link.")
+            raise ValueError("irodori.ref_wav must not be a symbolic link.")
         resolved = path.resolve(strict=False)
         if not resolved.is_relative_to(root):
             raise ValueError(
-                "irodori.reference_wav must resolve inside the configured voices directory."
+                "irodori.ref_wav must resolve inside the configured voices directory."
             )
         if resolved.suffix.lower() not in VOICE_FILE_SUFFIXES:
             allowed = ", ".join(VOICE_FILE_SUFFIXES)
-            raise ValueError(f"irodori.reference_wav must use one of: {allowed}.")
+            raise ValueError(f"irodori.ref_wav must use one of: {allowed}.")
         if resolved.parent != root or not self.is_managed_voice_id(resolved.stem):
-            raise ValueError("irodori.reference_wav must refer to a managed voice file.")
+            raise ValueError("irodori.ref_wav must refer to a managed voice file.")
         if resolved not in self._candidate_paths(root, resolved.stem):
-            raise ValueError("irodori.reference_wav must refer to a managed voice file.")
+            raise ValueError("irodori.ref_wav must refer to a managed voice file.")
         if not resolved.is_file():
-            raise ValueError("irodori.reference_wav must refer to a managed voice file.")
+            raise ValueError("irodori.ref_wav must refer to a managed voice file.")
         return resolved
 
     def _path_for(self, voice_id: str, *, suffix: str) -> Path:

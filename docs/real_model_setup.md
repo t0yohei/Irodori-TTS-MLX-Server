@@ -108,7 +108,7 @@ curl http://127.0.0.1:8000/v1/audio/speech \
     "voice": "voicedesign",
     "response_format": "wav",
     "irodori": {
-      "no_reference": true,
+      "no_ref": true,
       "caption": "calm narration, clear diction",
       "preset": "balanced"
     }
@@ -123,9 +123,9 @@ If `IRODORI_SERVER_BEARER_TOKEN` or `IRODORI_API_KEY` is configured, add:
 ```
 
 The command should create a non-empty `speech.wav` file. For the current
-VoiceDesign no-reference path, set `irodori.no_reference=true` and provide a
-caption. Do not set `irodori.reference_wav` together with
-`irodori.no_reference=true`.
+VoiceDesign no-reference path, set `irodori.no_ref=true` and provide a
+caption. Do not set `irodori.ref_wav` together with
+`irodori.no_ref=true`.
 
 ## Common Configuration Failures
 
@@ -149,11 +149,11 @@ Common setup failures:
 | No weights source is configured. | 503 | `runtime_unavailable` | Set `IRODORI_MLX_WEIGHTS_REPO` or `IRODORI_MLX_WEIGHTS_DIR`. |
 | Irodori-TTS-MLX runtime imports fail. | 503 | `runtime_unavailable` | Install Irodori-TTS-MLX and its runtime dependencies in the server venv. |
 | Hosted repo or local layout is missing required files or fails validation. | 503 | `runtime_unavailable` | Use a layout with manifest, config, tokenizer metadata, conversion metadata, weights, and checksums matching the Irodori-TTS-MLX layout contract. |
-| `IRODORI_MLX_TEXT_MAX_LENGTH` or `IRODORI_MLX_CAPTION_MAX_LENGTH` is not an integer. | 503 | `runtime_unavailable` | Use an integer value or unset it. |
+| `IRODORI_MLX_MAX_TEXT_LEN` or `IRODORI_MLX_MAX_CAPTION_LEN` is not an integer. | 503 | `runtime_unavailable` | Use an integer value or unset it. |
 | Server settings such as `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS` are invalid. | 503 | `server_configuration_error` | Use finite, non-negative queue timeout and a concurrency value of at least 1. |
 | Bearer auth is enabled and the request omits or uses the wrong token. | 401 | `invalid_api_key` | Send `Authorization: Bearer <token>`. |
 | The request names a model id not listed by `/v1/models`. | 404 | `model_not_found` | Use `irodori-tts-mlx` unless `IRODORI_MLX_MODEL_ID` intentionally changes it. |
-| VoiceDesign options conflict, for example `reference_wav` with `no_reference=true`. | 400 | `invalid_irodori_options` | Use either no-reference caption generation or reference-audio generation, not both. |
+| VoiceDesign options conflict, for example `ref_wav` with `no_ref=true`. | 400 | `invalid_irodori_options` | Use either no-reference caption generation or reference-audio generation, not both. |
 
 Do not paste tokens into shell history or commit `.env` files. Keep converted
 weights and generated audio outside the repository unless a separate release

@@ -105,8 +105,8 @@ def assert_managed_reference_options(
     path: str,
     voice_id: str,
 ) -> None:
-    assert options["reference_wav"] == path
-    assert options["no_reference"] is False
+    assert options["ref_wav"] == path
+    assert options["no_ref"] is False
     cache = options[MANAGED_REFERENCE_CACHE_OPTION]
     assert isinstance(cache, dict)
     assert cache["voice_id"] == voice_id
@@ -629,7 +629,7 @@ def test_voice_upload_and_replace_reject_files_above_configured_limit(tmp_path) 
 
 
 @pytest.mark.parametrize(
-    "reference_wav",
+    "ref_wav",
     [
         "https://example.com/ref.wav",
         "../outside.wav",
@@ -638,7 +638,7 @@ def test_voice_upload_and_replace_reject_files_above_configured_limit(tmp_path) 
         "bad.id.wav",
     ],
 )
-def test_audio_speech_rejects_remote_or_arbitrary_reference_wav(tmp_path, reference_wav) -> None:
+def test_audio_speech_rejects_remote_or_arbitrary_reference_wav(tmp_path, ref_wav) -> None:
     runtime = MockSpeechRuntime()
     (tmp_path / "imports").mkdir()
     (tmp_path / "imports" / "private.wav").write_bytes(b"wav")
@@ -652,12 +652,12 @@ def test_audio_speech_rejects_remote_or_arbitrary_reference_wav(tmp_path, refere
             "input": "hello",
             "voice": "sample",
             "response_format": "wav",
-            "irodori": {"reference_wav": reference_wav, "no_reference": False},
+            "irodori": {"ref_wav": ref_wav, "no_ref": False},
         },
     )
 
     assert response.status_code == 400
-    assert response.json()["error"]["param"] == "irodori.reference_wav"
+    assert response.json()["error"]["param"] == "irodori.ref_wav"
     assert response.json()["error"]["code"] == "invalid_irodori_options"
     assert runtime.requests == []
 
@@ -674,7 +674,7 @@ def test_audio_speech_accepts_explicit_managed_reference_wav(tmp_path) -> None:
             "input": "hello",
             "voice": "sample",
             "response_format": "wav",
-            "irodori": {"reference_wav": "sample.wav", "no_reference": False},
+            "irodori": {"ref_wav": "sample.wav", "no_ref": False},
         },
     )
 
@@ -805,12 +805,12 @@ def test_managed_voice_does_not_override_explicit_irodori_reference_options(tmp_
             "input": "hello",
             "voice": "sample",
             "response_format": "wav",
-            "irodori": {"no_reference": True, "caption": "calm"},
+            "irodori": {"no_ref": True, "caption": "calm"},
         },
     )
 
     assert response.status_code == 200
-    assert runtime.requests[-1].irodori == {"no_reference": True, "caption": "calm"}
+    assert runtime.requests[-1].irodori == {"no_ref": True, "caption": "calm"}
 
 
 def test_managed_voice_resolution_accepts_upstream_no_ref_false_alias(tmp_path) -> None:
@@ -950,11 +950,11 @@ def test_managed_voice_auto_seconds_gating_noops(tmp_path, input_text, irodori) 
 @pytest.mark.parametrize(
     "payload_patch",
     [
-        {"irodori": {"no_reference": "true", "caption": "calm"}},
+        {"irodori": {"no_ref": "true", "caption": "calm"}},
         {"no_ref": "true", "irodori": {"caption": "calm"}},
     ],
 )
-def test_managed_voice_resolution_respects_boolean_like_no_reference_true(
+def test_managed_voice_resolution_respects_boolean_like_no_ref_true(
     tmp_path, payload_patch
 ) -> None:
     runtime = MockSpeechRuntime()
@@ -980,7 +980,7 @@ def test_managed_voice_resolution_respects_boolean_like_no_reference_true(
     )
 
     assert response.status_code == 200
-    assert runtime.requests[-1].irodori == {"no_reference": "true", "caption": "calm"}
+    assert runtime.requests[-1].irodori == {"no_ref": "true", "caption": "calm"}
 
 
 @pytest.mark.parametrize("voice", ["../sample", "my.voice", "voice:v1"])
@@ -1301,7 +1301,7 @@ def test_audio_speech_stream_chunks_returns_queue_timeout_before_streaming() -> 
         "input": "hello. goodbye.",
         "voice": "voicedesign",
         "response_format": "wav",
-        "irodori": {"no_reference": True},
+        "irodori": {"no_ref": True},
     }
     first_status: dict[str, int] = {}
 
@@ -1424,7 +1424,7 @@ def test_audio_speech_accepts_voicedesign_caption_no_reference_options() -> None
             "response_format": "wav",
             "irodori": {
                 "caption": "落ち着いたナレーション。明瞭で少し低めの声。",
-                "no_reference": True,
+                "no_ref": True,
                 "preset": "balanced",
                 "cfg_scale_caption": 3.5,
                 "seconds": 2.0,
@@ -1443,7 +1443,7 @@ def test_audio_speech_accepts_voicedesign_caption_no_reference_options() -> None
             speed=1.0,
             irodori={
                 "caption": "落ち着いたナレーション。明瞭で少し低めの声。",
-                "no_reference": True,
+                "no_ref": True,
                 "preset": "balanced",
                 "cfg_scale_caption": 3.5,
                 "seconds": 2.0,
@@ -1481,7 +1481,7 @@ def test_audio_speech_accepts_upstream_style_top_level_option_aliases() -> None:
 
     assert response.status_code == 200
     assert runtime.requests[0].irodori == {
-        "no_reference": True,
+        "no_ref": True,
         "seconds": 2.5,
         "duration_scale": 0.9,
         "num_steps": 24,
@@ -1492,8 +1492,8 @@ def test_audio_speech_accepts_upstream_style_top_level_option_aliases() -> None:
         "cfg_guidance_mode": "independent",
         "cfg_min_t": 0.2,
         "cfg_max_t": 0.8,
-        "max_reference_seconds": 12.0,
-        "no_context_kv_cache": True,
+        "max_ref_seconds": 12.0,
+        "context_kv_cache": False,
         "chunking_enabled": False,
     }
 
@@ -1521,8 +1521,8 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases(tmp_path) ->
     )
 
     assert response.status_code == 200
-    assert runtime.requests[0].irodori["max_reference_seconds"] == 10
-    assert runtime.requests[0].irodori["no_context_kv_cache"] is False
+    assert runtime.requests[0].irodori["max_ref_seconds"] == 10
+    assert runtime.requests[0].irodori["context_kv_cache"] is True
     assert runtime.requests[0].irodori["chunking_enabled"] is False
     assert_managed_reference_options(
         runtime.requests[0].irodori,
@@ -1535,12 +1535,8 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases(tmp_path) ->
     ("payload_patch", "expected_irodori"),
     [
         (
-            {"no_ref": False, "irodori": {"no_reference": "false"}},
-            {"no_reference": False},
-        ),
-        (
-            {"context_kv_cache": True, "irodori": {"no_context_kv_cache": "false"}},
-            {"no_context_kv_cache": False},
+            {"no_ref": False, "irodori": {"no_ref": "false"}},
+            {"no_ref": False},
         ),
         (
             {"chunking_enabled": False, "irodori": {"chunking_enabled": "false"}},
@@ -1567,7 +1563,10 @@ def test_audio_speech_accepts_semantically_equal_bool_alias_values(
     assert runtime.requests[0].irodori == expected_irodori
 
 
-@pytest.mark.parametrize("unsupported", ["ref_latent"])
+@pytest.mark.parametrize(
+    "unsupported",
+    ["ref_latent", "reference_wav", "no_reference", "max_reference_seconds", "no_context_kv_cache"],
+)
 def test_audio_speech_rejects_unsupported_upstream_irodori_options(unsupported) -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
         "/v1/audio/speech",
@@ -1595,16 +1594,16 @@ def test_audio_speech_rejects_conflicting_alias_values() -> None:
             "voice": "voicedesign",
             "response_format": "wav",
             "no_ref": True,
-            "irodori": {"no_reference": False},
+            "irodori": {"no_ref": False},
         },
     )
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
-    assert "conflicts with irodori.no_reference" in response.json()["error"]["message"]
+    assert "conflicts with irodori.no_ref" in response.json()["error"]["message"]
 
 
-def test_audio_speech_rejects_top_level_reference_path_alias() -> None:
+def test_audio_speech_rejects_unmanaged_top_level_ref_wav() -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
         "/v1/audio/speech",
         json={
@@ -1616,9 +1615,9 @@ def test_audio_speech_rejects_top_level_reference_path_alias() -> None:
         },
     )
 
-    assert response.status_code == 422
-    assert response.json()["error"]["param"] == "ref_wav"
-    assert response.json()["error"]["code"] == "validation_error"
+    assert response.status_code == 400
+    assert response.json()["error"]["param"] == "irodori.ref_wav"
+    assert response.json()["error"]["code"] == "invalid_irodori_options"
 
 
 def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
@@ -1631,7 +1630,7 @@ def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "chunking_enabled": True,
                 "tail_trim_ms": 20,
                 "tail_silence_trim_ms": 120,
@@ -1643,7 +1642,7 @@ def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
 
     assert response.status_code == 200
     assert runtime.requests[0].irodori == {
-        "no_reference": True,
+        "no_ref": True,
         "chunking_enabled": True,
         "tail_trim_ms": 20,
         "tail_silence_trim_ms": 120,
@@ -1662,7 +1661,7 @@ def test_audio_speech_rejects_unsupported_chunking_controls() -> None:
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "chunking": True,
                 "chunk_max_chars": 8,
             },
@@ -1687,7 +1686,7 @@ def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "chunking_enabled": True,
                 "punctuation_chunking_enabled": True,
                 "seconds": 3.0,
@@ -1728,7 +1727,7 @@ def test_audio_speech_stream_chunks_supports_punctuation_chunking_enabled() -> N
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "chunking_enabled": True,
                 "punctuation_chunking_enabled": True,
             },
@@ -1766,7 +1765,7 @@ def test_audio_speech_stream_chunks_supports_first_sentence_comma_chunking() -> 
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "chunking_enabled": True,
                 "punctuation_chunking_enabled": True,
                 "first_sentence_comma_chunking_enabled": True,
@@ -1805,7 +1804,7 @@ def test_audio_speech_stream_chunks_rejects_invalid_first_sentence_comma_chunkin
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "punctuation_chunking_enabled": True,
                 "first_sentence_comma_chunking_enabled": "quick",
             },
@@ -1830,7 +1829,7 @@ def test_audio_speech_stream_chunks_rejects_unsupported_punctuation_chunk_mode()
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "chunking_enabled": True,
                 "chunk_mode": "punctuation",
             },
@@ -1854,7 +1853,7 @@ def test_audio_speech_rejects_unsupported_chunk_size_options() -> None:
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "chunking_enabled": True,
                 "punctuation_chunking_enabled": True,
                 "chunk_hard_max_chars": 3,
@@ -1879,7 +1878,7 @@ def test_audio_speech_stream_chunks_respects_disabled_chunking() -> None:
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "chunking_enabled": False,
             },
         },
@@ -2190,7 +2189,7 @@ def test_default_app_imports_without_model_weights_and_reports_runtime_unavailab
 
 def test_default_app_reports_invalid_integer_env_as_runtime_unavailable(monkeypatch) -> None:
     monkeypatch.setenv("IRODORI_MLX_WEIGHTS_REPO", "owner/repo")
-    monkeypatch.setenv("IRODORI_MLX_TEXT_MAX_LENGTH", "not-an-int")
+    monkeypatch.setenv("IRODORI_MLX_MAX_TEXT_LEN", "not-an-int")
 
     client = TestClient(create_app())
     health_response = client.get("/health")
@@ -2210,13 +2209,13 @@ def test_default_app_reports_invalid_integer_env_as_runtime_unavailable(monkeypa
         "configured": False,
         "loaded": False,
         "load_state": "failed",
-        "model_id": "irodori-tts-mlx",
-        "last_load_error": "IRODORI_MLX_TEXT_MAX_LENGTH must be an integer.",
+            "model_id": "irodori-tts-mlx",
+            "last_load_error": "IRODORI_MLX_MAX_TEXT_LEN must be an integer.",
     }
     assert health_response.json()["server"]["auth_enabled"] is False
     assert speech_response.status_code == 503
     assert speech_response.json()["error"]["code"] == "runtime_unavailable"
-    assert "IRODORI_MLX_TEXT_MAX_LENGTH" in speech_response.json()["error"]["message"]
+    assert "IRODORI_MLX_MAX_TEXT_LEN" in speech_response.json()["error"]["message"]
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])

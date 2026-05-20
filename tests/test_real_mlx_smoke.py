@@ -54,7 +54,7 @@ def test_real_mlx_voicedesign_speech_endpoint_returns_non_empty_wav() -> None:
             "voice": "voicedesign",
             "response_format": "wav",
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "caption": os.getenv(
                     "IRODORI_REAL_MLX_SMOKE_CAPTION", "落ち着いた明瞭なナレーション"
                 ),

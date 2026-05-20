@@ -93,7 +93,7 @@ def test_openai_python_client_downloads_non_streaming_speech(tmp_path: Path) -> 
         response_format="wav",
         extra_body={
             "irodori": {
-                "no_reference": True,
+                "no_ref": True,
                 "caption": "calm narration, clear diction",
                 "preset": "balanced",
             }
@@ -111,7 +111,7 @@ def test_openai_python_client_downloads_non_streaming_speech(tmp_path: Path) -> 
             response_format="wav",
             speed=1.0,
             irodori={
-                "no_reference": True,
+                "no_ref": True,
                 "caption": "calm narration, clear diction",
                 "preset": "balanced",
             },
@@ -147,7 +147,7 @@ def test_openai_python_client_receives_converted_pcm_response() -> None:
         voice="voicedesign",
         input="Return raw PCM bytes.",
         response_format="pcm",
-        extra_body={"irodori": {"no_reference": True}},
+        extra_body={"irodori": {"no_ref": True}},
     )
 
     assert response.content == b"\x01\x02\x03\x04"
@@ -165,7 +165,7 @@ def test_supported_upstream_style_request_fixture_is_forwarded_to_runtime() -> N
         "speed": 1.2,
         "stream": False,
         "irodori": {
-            "no_reference": True,
+            "no_ref": True,
             "caption": "bright narration, clear diction",
             "preset": "fast",
             "seed": 42,
@@ -204,7 +204,7 @@ def test_supported_upstream_style_request_fixture_is_forwarded_to_runtime() -> N
         ({"stream_format": "sse"}, 400, "stream_format", "unsupported_streaming"),
         ({"stream": True}, 400, "stream", "unsupported_streaming"),
         (
-            {"irodori": {"no_reference": True, "num_steps": 0}},
+            {"irodori": {"no_ref": True, "num_steps": 0}},
             400,
             "irodori",
             "invalid_irodori_options",

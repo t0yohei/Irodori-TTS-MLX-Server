@@ -108,15 +108,7 @@ class AudioSpeechRequest(BaseModel):
                 normalized.pop(alias),
                 alias=alias,
             )
-        if "context_kv_cache" in normalized:
-            _set_inverted_irodori_option(
-                irodori_options,
-                "no_context_kv_cache",
-                normalized.pop("context_kv_cache"),
-                alias="context_kv_cache",
-            )
-
-        _normalize_irodori_aliases(irodori_options)
+        _reject_unsupported_irodori_options(irodori_options)
         normalized["irodori"] = irodori_options
         return normalized
 
@@ -136,7 +128,8 @@ class AudioSpeechRequest(BaseModel):
 
 
 TOP_LEVEL_IRODORI_ALIASES = {
-    "no_ref": "no_reference",
+    "ref_wav": "ref_wav",
+    "no_ref": "no_ref",
     "seconds": "seconds",
     "duration_scale": "duration_scale",
     "num_steps": "num_steps",
@@ -147,27 +140,25 @@ TOP_LEVEL_IRODORI_ALIASES = {
     "cfg_guidance_mode": "cfg_guidance_mode",
     "cfg_min_t": "cfg_min_t",
     "cfg_max_t": "cfg_max_t",
-    "max_ref_seconds": "max_reference_seconds",
-    "max_reference_seconds": "max_reference_seconds",
-    "no_context_kv_cache": "no_context_kv_cache",
+    "max_ref_seconds": "max_ref_seconds",
+    "context_kv_cache": "context_kv_cache",
     "chunking_enabled": "chunking_enabled",
     "punctuation_chunking_enabled": "punctuation_chunking_enabled",
     "first_sentence_comma_chunking_enabled": "first_sentence_comma_chunking_enabled",
     "chunk_min_chars": "chunk_min_chars",
 }
 
-IRODORI_OPTION_ALIASES = {
-    "ref_wav": "reference_wav",
-    "no_ref": "no_reference",
-    "max_ref_seconds": "max_reference_seconds",
-}
-
 UNSUPPORTED_IRODORI_OPTIONS = {
     "ref_latent",
+    "reference_wav",
+    "no_reference",
+    "max_reference_seconds",
     "min_seconds",
     "max_seconds",
+    "no_context_kv_cache",
     "ref_normalize_db",
     "ref_ensure_max",
+    "max_caption_len",
     "t_schedule_mode",
     "sway_coeff",
     "num_candidates",
@@ -204,8 +195,8 @@ def _irodori_option_values_match(canonical: str, current: Any, incoming: Any) ->
     if current == incoming:
         return True
     if canonical in {
-        "no_reference",
-        "no_context_kv_cache",
+        "no_ref",
+        "context_kv_cache",
         "chunking_enabled",
         "punctuation_chunking_enabled",
         "first_sentence_comma_chunking_enabled",
@@ -217,46 +208,11 @@ def _irodori_option_values_match(canonical: str, current: Any, incoming: Any) ->
     return False
 
 
-def _set_inverted_irodori_option(
-    options: dict[str, Any], canonical: str, value: Any, *, alias: str
-) -> None:
-    if isinstance(value, bool):
-        inverted = not value
-    elif isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            inverted = False
-        elif normalized in {"0", "false", "no", "off"}:
-            inverted = True
-        else:
-            raise ValueError(f"irodori.{alias} must be a boolean.")
-    else:
-        raise ValueError(f"irodori.{alias} must be a boolean.")
-    _set_irodori_option(options, canonical, inverted, alias=f"irodori.{alias}")
-
-
-def _normalize_irodori_aliases(options: dict[str, Any]) -> None:
+def _reject_unsupported_irodori_options(options: dict[str, Any]) -> None:
     unsupported = sorted(UNSUPPORTED_IRODORI_OPTIONS.intersection(options))
     if unsupported:
         names = ", ".join(f"irodori.{name}" for name in unsupported)
         raise ValueError(f"Unsupported upstream Irodori option(s): {names}.")
-
-    if "context_kv_cache" in options:
-        _set_inverted_irodori_option(
-            options,
-            "no_context_kv_cache",
-            options.pop("context_kv_cache"),
-            alias="context_kv_cache",
-        )
-    for alias, canonical in IRODORI_OPTION_ALIASES.items():
-        if alias not in options:
-            continue
-        _set_irodori_option(
-            options,
-            canonical,
-            options.pop(alias),
-            alias=f"irodori.{alias}",
-        )
 
 
 def _bool_like_option(value: Any) -> bool | None:
@@ -480,18 +436,18 @@ def _apply_managed_voice_reference(
 ) -> dict[str, Any]:
     irodori_options = dict(request.irodori)
     irodori_options.pop(MANAGED_REFERENCE_CACHE_OPTION, None)
-    if "reference_wav" in irodori_options:
-        reference_wav = irodori_options["reference_wav"]
-        if not isinstance(reference_wav, str) or not reference_wav.strip():
+    if "ref_wav" in irodori_options:
+        ref_wav = irodori_options["ref_wav"]
+        if not isinstance(ref_wav, str) or not ref_wav.strip():
             raise openai_error(
-                "irodori.reference_wav must be a non-empty string.",
+                "irodori.ref_wav must be a non-empty string.",
                 status_code=400,
-                param="irodori.reference_wav",
+                param="irodori.ref_wav",
                 code="invalid_irodori_options",
             )
         try:
-            resolved_reference = voice_registry.validate_reference_path(reference_wav)
-            irodori_options["reference_wav"] = str(resolved_reference)
+            resolved_reference = voice_registry.validate_reference_path(ref_wav)
+            irodori_options["ref_wav"] = str(resolved_reference)
             irodori_options[MANAGED_REFERENCE_CACHE_OPTION] = _managed_reference_cache_metadata(
                 resolved_reference.stem,
                 resolved_reference,
@@ -500,15 +456,15 @@ def _apply_managed_voice_reference(
             raise openai_error(
                 str(exc),
                 status_code=400,
-                param="irodori.reference_wav",
+                param="irodori.ref_wav",
                 code="invalid_irodori_options",
             ) from exc
         except OSError as exc:
             raise _voice_storage_error(exc)
         return irodori_options
-    if "no_reference" in irodori_options:
-        no_reference = _bool_like_option(irodori_options["no_reference"])
-        if no_reference is not False:
+    if "no_ref" in irodori_options:
+        no_ref = _bool_like_option(irodori_options["no_ref"])
+        if no_ref is not False:
             return irodori_options
 
     voice_id = _voice_id_from_request(request.voice)
@@ -524,8 +480,8 @@ def _apply_managed_voice_reference(
     if voice_file is None:
         return irodori_options
 
-    irodori_options["reference_wav"] = str(voice_file.path)
-    irodori_options["no_reference"] = False
+    irodori_options["ref_wav"] = str(voice_file.path)
+    irodori_options["no_ref"] = False
     irodori_options[MANAGED_REFERENCE_CACHE_OPTION] = _managed_reference_cache_metadata(
         voice_file.voice_id,
         voice_file.path,
@@ -802,7 +758,7 @@ def _stream_chunk_generation_requests(
 
 def _runtime_default_text_max_length(runtime: SpeechRuntime) -> int:
     config = getattr(runtime, "config", None)
-    value = getattr(config, "text_max_length", 256)
+    value = getattr(config, "max_text_len", 256)
     try:
         return max(1, int(value))
     except (TypeError, ValueError):
