@@ -120,8 +120,8 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 `seconds`, `duration_scale`, `num_steps`, `seed`, `t_schedule_mode`,
 `sway_coeff`, `rescale_k`, `rescale_sigma`, `speaker_kv_scale`,
 `speaker_kv_min_t`, `speaker_kv_max_layers`, `chunking_enabled`,
-`punctuation_chunking_enabled`, `first_sentence_comma_chunking_enabled`,
-`chunk_min_chars`, `tail_trim_ms`, `tail_silence_trim_ms` です。OpenAI の `speed` は
+`chunk_min_chars`, `first_sentence_chunk_min_chars`, `tail_trim_ms`,
+`tail_silence_trim_ms` です。OpenAI の `speed` は
 `duration_scale` 未指定時に `duration_scale=1/speed` として扱います。
 `irodori.ref_embed` は `IRODORI_SERVER_VOICES_DIR` 配下にある既存の
 `.speaker.safetensors` managed file だけを受け付けます。remote URL、path
@@ -132,13 +132,10 @@ traversal、symlink、任意の local path は拒否します。
 runtime に短文向け auto-duration cap も渡します。
 chunking はデフォルトで有効で、句読点または改行に到達した時点で現在の chunk が
 `chunk_min_chars` 以上の非空白文字を含む場合に分割します。`chunk_min_chars` の
-デフォルトは `80` です。chunking には `chunking_enabled`,
-`punctuation_chunking_enabled`, `first_sentence_comma_chunking_enabled`,
-`chunk_min_chars` を使ってください。`punctuation_chunking_enabled` は互換用に
-受け付けますが、通常の chunking も句読点ベースです。
-`first_sentence_comma_chunking_enabled=true` は punctuation chunking と併用し、
-最初の1文だけ `、` などの読点で分割します。最初の SSE 音声 event
-を早く返したい場合の opt-in です。
+デフォルトは `80` です。chunking には `chunking_enabled`, `chunk_min_chars`,
+`first_sentence_chunk_min_chars` を使ってください。
+`first_sentence_chunk_min_chars` を指定すると、最初の1文だけ小さい閾値で
+句読点分割できます。最初の SSE 音声 event を早く返したい場合の opt-in です。
 管理対象 reference voice の短文リクエストで `fast` または `ultra-fast` を使い、
 `seconds` と `duration_scale` を省略し `speed=1.0` のままにした場合、サーバーは
 保守的な文字数ベースの `seconds` 推定値を自動設定します。低遅延応答で明らかな
@@ -155,7 +152,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"落ち着いた明瞭なナレーション","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"落ち着いた明瞭なナレーション","chunking_enabled":true,"chunk_min_chars":80,"first_sentence_chunk_min_chars":1}}'
 ```
 
 ```text

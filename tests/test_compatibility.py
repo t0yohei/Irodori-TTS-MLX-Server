@@ -174,7 +174,7 @@ def test_supported_upstream_style_request_fixture_is_forwarded_to_runtime() -> N
             "cfg_scale_caption": 3.5,
             "cfg_scale_speaker": 4.0,
             "chunking_enabled": True,
-            "punctuation_chunking_enabled": True,
+            "first_sentence_chunk_min_chars": 1,
             "tail_trim_ms": 10,
             "tail_silence_trim_ms": 80,
             "tail_silence_keep_ms": 20,
