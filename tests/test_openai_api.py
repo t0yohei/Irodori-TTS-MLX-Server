@@ -1796,6 +1796,7 @@ def test_audio_speech_sse_stream_emits_each_generated_chunk_as_audio_delta() -> 
                 "no_ref": True,
                 "chunking_enabled": True,
                 "punctuation_chunking_enabled": True,
+                "chunk_min_chars": 1,
                 "seconds": 3.0,
             },
         },
@@ -1845,22 +1846,18 @@ def test_audio_speech_sse_stream_supports_punctuation_chunking_enabled() -> None
 
     assert response.status_code == 200
     assert [request.input for request in runtime.requests] == [
-        "こんにちは。",
-        "これは stream chunks の動作確認です。",
-        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
+        (
+            "こんにちは。これは stream chunks の動作確認です。"
+            "最初の音声が返ったら、続きの音声を生成しながら再生できます。"
+        ),
     ]
     events = sse_events(response.text)
     assert [event for event, _data in events] == [
         "speech.audio.delta",
-        "speech.audio.delta",
-        "speech.audio.delta",
         "speech.audio.done",
     ]
-    assert [data["type"] for _event, data in events[:3]] == [
-        "speech.audio.delta",
-        "speech.audio.delta",
-        "speech.audio.delta",
-    ]
+    assert events[0][1]["type"] == "speech.audio.delta"
+    assert events[1][1] == speech_audio_done_payload()
 
 
 def test_audio_speech_sse_stream_supports_first_sentence_comma_chunking() -> None:
@@ -2401,7 +2398,10 @@ def test_server_config_rejects_negative_reference_cache_limit_env(monkeypatch) -
         server_config_from_env()
 
 
-def test_invalid_server_env_keeps_health_available_and_blocks_openai_routes(monkeypatch) -> None:
+def test_invalid_server_env_keeps_health_available_and_blocks_openai_routes(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS", "nan")
 
     client = TestClient(create_app(runtime=MockSpeechRuntime()))

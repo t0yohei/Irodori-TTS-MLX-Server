@@ -659,7 +659,11 @@ def test_mlx_runtime_manager_rejects_non_string_lora_adapter_values() -> None:
 
 
 def test_split_text_for_generation_prefers_punctuation_boundaries() -> None:
-    assert split_text_for_generation("短い文です。次の文です。最後です。", max_chars=8) == [
+    assert split_text_for_generation(
+        "短い文です。次の文です。最後です。",
+        max_chars=8,
+        chunk_min_chars=1,
+    ) == [
         "短い文です。",
         "次の文です。",
         "最後です。",
@@ -699,15 +703,24 @@ def test_split_text_for_generation_falls_back_to_hard_slices() -> None:
 
 def test_split_text_for_generation_punctuation_mode_merges_short_segments() -> None:
     assert split_text_for_generation(
+        "これは短い文です。これはまだ同じチャンクに残る文です。"
+        "ここまでで十分長くなったので分割されます。最後です。",
+        max_chars=256,
+        chunk_mode="punctuation",
+        chunk_min_chars=35,
+    ) == [
+        "これは短い文です。これはまだ同じチャンクに残る文です。ここまでで十分長くなったので分割されます。",
+        "最後です。",
+    ]
+
+
+def test_split_text_for_generation_default_min_chars_keeps_short_sentences_together() -> None:
+    assert split_text_for_generation(
         "こんにちは。これは stream chunks の動作確認です。最初の音声が返ったら、"
         "続きの音声を生成しながら再生できます。",
         max_chars=256,
         chunk_mode="punctuation",
-    ) == [
-        "こんにちは。",
-        "これは stream chunks の動作確認です。",
-        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
-    ]
+    ) == ["こんにちは。これは stream chunks の動作確認です。最初の音声が返ったら、続きの音声を生成しながら再生できます。"]
 
 
 def test_split_text_for_generation_first_sentence_comma_chunking() -> None:
@@ -723,15 +736,17 @@ def test_split_text_for_generation_first_sentence_comma_chunking() -> None:
     ]
 
 
-def test_first_sentence_comma_chunking_leaves_text_without_comma_unchanged() -> None:
+def test_punctuation_mode_splits_on_commas_when_min_chars_reached() -> None:
     assert split_text_for_generation(
         "最初の文です。次は長くて、通常のままです。",
         max_chars=256,
         chunk_mode="punctuation",
+        chunk_min_chars=1,
         first_sentence_comma_chunking_enabled=True,
     ) == [
         "最初の文です。",
-        "次は長くて、通常のままです。",
+        "次は長くて、",
+        "通常のままです。",
     ]
 
 
@@ -760,7 +775,17 @@ def test_punctuation_mode_drops_boundary_whitespace_after_period() -> None:
         "こんにちは。  次です。\n最後です。",
         max_chars=256,
         chunk_mode="punctuation",
+        chunk_min_chars=1,
     ) == ["こんにちは。", "次です。", "最後です。"]
+
+
+def test_punctuation_mode_ignores_boundary_whitespace_for_hard_max() -> None:
+    assert split_text_for_generation(
+        "hello. goodbye.",
+        max_chars=8,
+        chunk_mode="punctuation",
+        chunk_min_chars=1,
+    ) == ["hello.", "goodbye."]
 
 
 def test_split_text_for_generation_punctuation_mode_keeps_closers_with_period() -> None:
@@ -768,6 +793,7 @@ def test_split_text_for_generation_punctuation_mode_keeps_closers_with_period() 
         '"こんにちは。"次です。終わり。\'',
         max_chars=256,
         chunk_mode="punctuation",
+        chunk_min_chars=1,
     ) == ['"こんにちは。"', "次です。", "終わり。'"]
 
 
@@ -776,8 +802,9 @@ def test_split_text_for_generation_punctuation_mode_keeps_overflow_closers_attac
         'ab。"c',
         max_chars=3,
         chunk_mode="punctuation",
+        chunk_min_chars=1,
         chunk_hard_max_chars=3,
-    ) == ['ab。"', "c"]
+    ) == ["ab。", '"c']
 
 
 def test_split_text_for_generation_punctuation_mode_keeps_terminal_marks_with_period() -> None:
@@ -785,6 +812,7 @@ def test_split_text_for_generation_punctuation_mode_keeps_terminal_marks_with_pe
         "こんにちは。！？次です。",
         max_chars=256,
         chunk_mode="punctuation",
+        chunk_min_chars=1,
     ) == ["こんにちは。！？", "次です。"]
 
 
@@ -805,7 +833,7 @@ def test_mlx_runtime_manager_chunks_long_text_and_concatenates_wav_output() -> N
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_ref": True},
+            irodori={"no_ref": True, "chunk_min_chars": 1},
         )
     )
 
@@ -860,14 +888,19 @@ def test_mlx_runtime_manager_supports_punctuation_chunking_enabled() -> None:
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_ref": True, "punctuation_chunking_enabled": True},
+            irodori={
+                "no_ref": True,
+                "punctuation_chunking_enabled": True,
+                "chunk_min_chars": 1,
+            },
         )
     )
 
     assert [request.text for request in WaveMLXRuntime.instances[0].requests] == [
         "こんにちは。",
         "これは stream chunks の動作確認です。",
-        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
+        "最初の音声が返ったら、",
+        "続きの音声を生成しながら再生できます。",
     ]
 
 

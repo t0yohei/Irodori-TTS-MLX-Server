@@ -34,10 +34,11 @@ LORA_ADAPTER_OPTION = "lora_adapter"
 DEFAULT_CODEC_ARTIFACT_REPO = "t0yohei/Irodori-TTS-MLX-DACVAE-Codec"
 MLX_CODEC_RUNTIME_MODES = {"mlx", "mlx-decode", "mlx-decode-subprocess"}
 MANAGED_REFERENCE_CACHE_OPTION = "_managed_reference_cache"
-DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS = 12
+DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS = 80
 DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS = 40
 DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS = 120
 FIRST_SENTENCE_COMMA_BREAK_CHARS = set("、，,;；:：")
+PUNCTUATION_BREAK_CHARS = set("。．.!！？?、，,;；:\n")
 SENTENCE_TERMINAL_CHARS = set("。．.!！？?")
 PUNCTUATION_CLOSING_CHARS = set("」』）)]】〕〉》｝}＞>？”’”\"'!?！？")
 logger = logging.getLogger("irodori_tts_mlx_server.runtime")
@@ -508,7 +509,7 @@ def _num_steps_option(options: dict[str, Any]) -> int:
 
 
 def _chunk_mode_option(options: dict[str, Any]) -> str:
-    return "punctuation" if _bool_option(options, "punctuation_chunking_enabled") else "max_chars"
+    return "punctuation"
 
 
 def _runtime_sampling_request_class(runtime_module: Any) -> Any:
@@ -599,38 +600,18 @@ def split_text_for_generation(
         raise RuntimeRequestError("irodori.chunk_target_chars must be >= 1.")
     if chunk_hard_max_chars < 1:
         raise RuntimeRequestError("irodori.chunk_hard_max_chars must be >= 1.")
-    if chunk_mode == "punctuation":
-        return _split_text_by_punctuation_plan(
-            text,
-            min_chars=chunk_min_chars,
-            target_chars=chunk_target_chars,
-            hard_max_chars=min(chunk_hard_max_chars, max_chars),
-            split_first_sentence_on_commas=first_sentence_comma_chunking_enabled,
-        )
-    if len(text) <= max_chars:
-        return [text]
-
-    chunks: list[str] = []
-    current = ""
-    for segment in _iter_punctuation_segments(text):
-        if not current:
-            current = segment
-            continue
-        if len(current) + len(segment) <= max_chars:
-            current += segment
-            continue
-        chunks.extend(_split_overlong_segment(current, max_chars=max_chars))
-        current = segment.lstrip()
-    if current:
-        chunks.extend(_split_overlong_segment(current, max_chars=max_chars))
-    return [chunk for chunk in chunks if chunk]
+    return _split_text_by_punctuation_plan(
+        text,
+        min_chars=chunk_min_chars,
+        hard_max_chars=min(chunk_hard_max_chars, max_chars),
+        split_first_sentence_on_commas=first_sentence_comma_chunking_enabled,
+    )
 
 
 def _split_text_by_punctuation_plan(
     text: str,
     *,
     min_chars: int,
-    target_chars: int,
     hard_max_chars: int,
     split_first_sentence_on_commas: bool = False,
 ) -> list[str]:
@@ -638,53 +619,46 @@ def _split_text_by_punctuation_plan(
         fast_chunks = _split_first_sentence_on_commas(
             text,
             min_chars=min_chars,
-            target_chars=target_chars,
             hard_max_chars=hard_max_chars,
         )
         if fast_chunks is not None:
             return fast_chunks
 
-    if "。" not in text and len(text) <= target_chars and len(text) <= hard_max_chars:
-        return [text]
+    if not any(char in text for char in PUNCTUATION_BREAK_CHARS):
+        return _split_overlong_segment(text, max_chars=hard_max_chars)
 
     chunks: list[str] = []
-    current = ""
-    for segment in _iter_punctuation_segments(text):
-        if _ends_with_japanese_period_before_closers(current):
-            closing, segment = _split_leading_closing_punctuation(segment)
-            current += closing
-            if segment.strip() == "":
+    current: list[str] = []
+    current_chars = 0
+    pending_boundary = False
+
+    for char in text:
+        if pending_boundary and char not in PUNCTUATION_CLOSING_CHARS:
+            chunk = "".join(current).strip()
+            if chunk:
+                chunks.append(chunk)
+            current = []
+            current_chars = 0
+            pending_boundary = False
+            if char.isspace():
                 continue
-            if closing:
-                chunks.append(current)
-            else:
-                chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
-            current = ""
-            segment = _lstrip_non_whitespace(segment)
-        if len(segment) > hard_max_chars:
-            if current:
-                chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
-                current = ""
-            chunks.extend(
-                _split_overlong_segment(_lstrip_non_whitespace(segment), max_chars=hard_max_chars)
-            )
-            continue
 
-        candidate_length = len(current) + len(segment)
-        if not current:
-            current = segment
+        current.append(char)
+        if not char.isspace():
+            current_chars += 1
+        if len(current) >= hard_max_chars:
+            chunk = "".join(current)
+            chunks.append(chunk if chunk.strip() == "" else chunk.strip())
+            current = []
+            current_chars = 0
+            pending_boundary = False
             continue
-        if candidate_length <= hard_max_chars and (
-            len(current) < min_chars or candidate_length <= target_chars
-        ):
-            current += segment
-            continue
+        if char in PUNCTUATION_BREAK_CHARS and current_chars >= min_chars:
+            pending_boundary = True
 
-        chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
-        current = _lstrip_non_whitespace(segment)
-
-    if current:
-        chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
+    tail = "".join(current).strip()
+    if tail:
+        chunks.extend(_split_overlong_segment(tail, max_chars=hard_max_chars))
     return [chunk for chunk in chunks if chunk]
 
 
@@ -692,7 +666,6 @@ def _split_first_sentence_on_commas(
     text: str,
     *,
     min_chars: int,
-    target_chars: int,
     hard_max_chars: int,
 ) -> list[str] | None:
     sentence_end = _first_sentence_end_index(text)
@@ -730,7 +703,6 @@ def _split_first_sentence_on_commas(
             _split_text_by_punctuation_plan(
                 remaining,
                 min_chars=min_chars,
-                target_chars=target_chars,
                 hard_max_chars=hard_max_chars,
                 split_first_sentence_on_commas=False,
             )
@@ -772,11 +744,10 @@ def _ends_with_japanese_period_before_closers(text: str) -> bool:
 
 
 def _iter_punctuation_segments(text: str) -> list[str]:
-    break_chars = set("。．.!！？?、，,;；:\n")
     segments: list[str] = []
     start = 0
     for index, char in enumerate(text):
-        if char in break_chars:
+        if char in PUNCTUATION_BREAK_CHARS:
             end = index + 1
             segment = text[start:end]
             if segment:
