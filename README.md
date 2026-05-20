@@ -228,8 +228,9 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 
 Requests accept `model`, `input`, `voice`, `response_format`, `speed`, and
 an `irodori` options object. For upstream client compatibility, unambiguous
-top-level runtime option aliases such as `no_ref`, `seconds`, `duration_scale`,
-`num_steps`, `seed`, `cfg_scale_*`, `max_ref_seconds`, `context_kv_cache`, and
+top-level runtime option aliases such as `no_ref`, `ref_embed`, `seconds`,
+`duration_scale`, `num_steps`, `seed`, `cfg_scale_*`, `t_schedule_mode`,
+`rescale_*`, `speaker_kv_*`, `max_ref_seconds`, `context_kv_cache`, and
 `chunking_enabled` are normalized into `irodori`. `response_format=wav` and
 `response_format=pcm`
 work without optional encoders. `mp3`, `flac`, `opus`, and `aac` use FFmpeg
@@ -238,18 +239,23 @@ setup guidance. The OpenAI-compatible `/v1/audio/speech` route does not stream
 synthesis; `stream=true`, `stream_format`, or `Accept: text/event-stream`
 requests return an OpenAI-style `unsupported_streaming` error object.
 
-Supported `irodori` runtime options include `ref_wav`, `no_ref`,
+Supported `irodori` runtime options include `ref_wav`, `ref_embed`, `no_ref`,
 `caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,
 `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`,
-`cfg_min_t`, `cfg_max_t`, `max_ref_seconds`, `context_kv_cache`,
+`cfg_min_t`, `cfg_max_t`, `t_schedule_mode`, `sway_coeff`, `rescale_k`,
+`rescale_sigma`, `speaker_kv_scale`, `speaker_kv_min_t`,
+`speaker_kv_max_layers`, `max_ref_seconds`, `context_kv_cache`,
 `chunking_enabled`, `punctuation_chunking_enabled`,
 `first_sentence_comma_chunking_enabled`, `chunk_min_chars`, `tail_trim_ms`,
 `tail_silence_trim_ms`, `tail_silence_keep_ms`, and `tail_silence_threshold`.
 Unsupported or ambiguous upstream options such as
-`lora_adapter`, `ref_latent`, legacy option names, and PyTorch schedule-specific controls are
+`lora_adapter`, `ref_latent`, legacy option names, and unsupported PyTorch-only controls are
 rejected instead of being silently ignored.
 When `duration_scale` is omitted, OpenAI `speed` maps to
 `duration_scale=1/speed`.
+`irodori.ref_embed` accepts only existing managed `.speaker.safetensors`
+files inside `IRODORI_SERVER_VOICES_DIR`; remote URLs, path traversal, symlinks,
+and arbitrary local paths are rejected.
 
 `irodori.lora_adapter` is intentionally unsupported with the current
 Irodori-TTS-MLX runtime boundary. Blank values are ignored, but non-empty values

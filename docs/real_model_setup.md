@@ -125,7 +125,10 @@ If `IRODORI_SERVER_BEARER_TOKEN` or `IRODORI_API_KEY` is configured, add:
 The command should create a non-empty `speech.wav` file. For the current
 VoiceDesign no-reference path, set `irodori.no_ref=true` and provide a
 caption. Do not set `irodori.ref_wav` together with
-`irodori.no_ref=true`.
+`irodori.no_ref=true`. Upstream-validated MLX recipes may also include
+`irodori.t_schedule_mode`, `irodori.sway_coeff`, `irodori.rescale_k`,
+`irodori.rescale_sigma`, and `irodori.speaker_kv_*` controls when the
+installed Irodori-TTS-MLX runtime supports them.
 
 ## Common Configuration Failures
 
