@@ -272,8 +272,8 @@ class IrodoriRuntimeConfig:
     weights_revision: str | None = None
     text_tokenizer_repo: str | None = None
     caption_tokenizer_repo: str | None = None
-    text_max_length: int = 256
-    caption_max_length: int | None = None
+    max_text_len: int = 256
+    max_caption_len: int | None = None
     codec_repo: str = "Aratako/Semantic-DACVAE-Japanese-32dim"
     codec_path: str | None = None
     codec_artifact_repo: str | None = DEFAULT_CODEC_ARTIFACT_REPO
@@ -314,8 +314,8 @@ def runtime_config_from_env() -> IrodoriRuntimeConfig:
         weights_revision=os.getenv("IRODORI_MLX_WEIGHTS_REVISION"),
         text_tokenizer_repo=os.getenv("IRODORI_MLX_TEXT_TOKENIZER_REPO"),
         caption_tokenizer_repo=os.getenv("IRODORI_MLX_CAPTION_TOKENIZER_REPO"),
-        text_max_length=_env_int("IRODORI_MLX_TEXT_MAX_LENGTH", default=256) or 256,
-        caption_max_length=_env_int("IRODORI_MLX_CAPTION_MAX_LENGTH"),
+        max_text_len=_env_int("IRODORI_MLX_MAX_TEXT_LEN", default=256) or 256,
+        max_caption_len=_env_int("IRODORI_MLX_MAX_CAPTION_LEN"),
         codec_repo=os.getenv("IRODORI_MLX_CODEC_REPO", "Aratako/Semantic-DACVAE-Japanese-32dim"),
         codec_path=os.getenv("IRODORI_MLX_CODEC_PATH") or None,
         codec_artifact_repo=os.getenv(
@@ -501,8 +501,32 @@ def _chunk_mode_option(options: dict[str, Any]) -> str:
     return "punctuation" if _bool_option(options, "punctuation_chunking_enabled") else "max_chars"
 
 
+def _runtime_sampling_request_class(runtime_module: Any) -> Any:
+    return _required_runtime_symbol(runtime_module, "SamplingRequest")
+
+
+def _runtime_class(runtime_module: Any) -> Any:
+    return _required_runtime_symbol(runtime_module, "InferenceRuntime")
+
+
+def _required_runtime_symbol(runtime_module: Any, name: str) -> Any:
+    try:
+        return getattr(runtime_module, name)
+    except AttributeError as exc:
+        raise RuntimeUnavailableError(
+            "Installed Irodori-TTS-MLX runtime is too old for this server. "
+            f"Upgrade Irodori-TTS-MLX so irodori_mlx.runtime exposes {name}."
+        ) from exc
+
+
+def _runtime_kwargs(callable_obj: Any, **kwargs: Any) -> dict[str, Any]:
+    signature = inspect.signature(callable_obj)
+    return {key: value for key, value in kwargs.items() if key in signature.parameters}
+
+
 def _runtime_generation_request_kwargs(runtime_module: Any, **kwargs: Any) -> dict[str, Any]:
-    signature = inspect.signature(runtime_module.GenerationRequest)
+    request_class = _runtime_sampling_request_class(runtime_module)
+    signature = inspect.signature(request_class)
     return {key: value for key, value in kwargs.items() if key in signature.parameters}
 
 
@@ -1016,7 +1040,7 @@ class IrodoriMLXRuntimeManager:
         )
         return split_text_for_generation(
             request.input,
-            max_chars=self.config.text_max_length,
+            max_chars=self.config.max_text_len,
             chunk_mode=chunk_mode,
             chunk_min_chars=chunk_min_chars,
             first_sentence_comma_chunking_enabled=_bool_option(
@@ -1091,15 +1115,18 @@ class IrodoriMLXRuntimeManager:
         codec_path = self._resolve_codec_path(resolve_codec_artifact_source)
 
         runtime_config = runtime_module.MLXRuntimeConfig(
-            model_config=model_config,
-            weights_path=weights_path,
-            text_tokenizer_repo=self.config.text_tokenizer_repo,
-            caption_tokenizer_repo=self.config.caption_tokenizer_repo,
-            text_max_length=self.config.text_max_length,
-            caption_max_length=self.config.caption_max_length,
-            codec=_codec_bridge_config(runtime_module, self.config, codec_path=codec_path),
+            **_runtime_kwargs(
+                runtime_module.MLXRuntimeConfig,
+                model_config=model_config,
+                weights_path=weights_path,
+                text_tokenizer_repo=self.config.text_tokenizer_repo,
+                caption_tokenizer_repo=self.config.caption_tokenizer_repo,
+                max_text_len=self.config.max_text_len,
+                max_caption_len=self.config.max_caption_len,
+                codec=_codec_bridge_config(runtime_module, self.config, codec_path=codec_path),
+            )
         )
-        factory = self._runtime_factory or runtime_module.MLXDACVAERuntime
+        factory = self._runtime_factory or _runtime_class(runtime_module)
         return factory(config=runtime_config)
 
     def _install_managed_reference_cache_bridge(self, runtime: Any) -> None:
@@ -1150,14 +1177,14 @@ class IrodoriMLXRuntimeManager:
                 "Only wav output can be passed to the Irodori-TTS-MLX runtime."
             )
         _reject_unsupported_lora_adapter(options)
-        reference_wav = _string_option(options, "reference_wav")
-        no_reference = _bool_option(options, "no_reference", default=reference_wav is None)
-        if reference_wav and no_reference:
+        ref_wav = _string_option(options, "ref_wav")
+        no_ref = _bool_option(options, "no_ref", default=ref_wav is None)
+        if ref_wav and no_ref:
             raise RuntimeRequestError(
-                "irodori.reference_wav and irodori.no_reference=true cannot both be set."
+                "irodori.ref_wav and irodori.no_ref=true cannot both be set."
             )
-        if not reference_wav and not no_reference:
-            raise RuntimeRequestError("irodori.no_reference=false requires irodori.reference_wav.")
+        if not ref_wav and not no_ref:
+            raise RuntimeRequestError("irodori.no_ref=false requires irodori.ref_wav.")
         duration_scale_explicit = "duration_scale" in options
         duration_scale = _float_option(options, "duration_scale", default=None)
         if duration_scale is None:
@@ -1178,13 +1205,14 @@ class IrodoriMLXRuntimeManager:
         ):
             max_auto_seconds = ULTRA_FAST_SHORT_PROMPT_MAX_AUTO_SECONDS
             max_auto_estimate_seconds = ULTRA_FAST_SHORT_PROMPT_MAX_ESTIMATE_SECONDS
-        return runtime_module.GenerationRequest(
+        request_class = _runtime_sampling_request_class(runtime_module)
+        return request_class(
             **_runtime_generation_request_kwargs(
                 runtime_module,
                 text=request.input,
                 output_wav=str(output_path),
-                reference_wav=reference_wav,
-                no_reference=no_reference,
+                ref_wav=ref_wav,
+                no_ref=no_ref,
                 caption=_string_option(options, "caption"),
                 seconds=seconds,
                 duration_scale=duration_scale,
@@ -1201,9 +1229,7 @@ class IrodoriMLXRuntimeManager:
                 cfg_min_t=cfg_min_t,
                 cfg_max_t=cfg_max_t,
                 seed=_int_option(options, "seed", default=0, minimum=0),
-                max_reference_seconds=_float_option(options, "max_reference_seconds", default=30.0),
-                use_context_kv_cache=not _bool_option(
-                    options, "no_context_kv_cache", default=False
-                ),
+                max_ref_seconds=_float_option(options, "max_ref_seconds", default=30.0),
+                context_kv_cache=_bool_option(options, "context_kv_cache", default=True),
             )
         )

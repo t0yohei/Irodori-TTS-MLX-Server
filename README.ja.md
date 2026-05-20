@@ -110,7 +110,7 @@ VoiceDesign v2 no-reference / caption で WAV を生成します。
 curl http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"こんにちは。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"落ち着いた明瞭なナレーション","preset":"balanced"}}' \
+  -d '{"model":"irodori-tts-mlx","input":"こんにちは。","voice":"voicedesign","response_format":"wav","irodori":{"no_ref":true,"caption":"落ち着いた明瞭なナレーション","preset":"balanced"}}' \
   --output speech.wav
 ```
 
@@ -119,7 +119,7 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 synthesis streaming を行いません。`stream=true`, `stream_format`,
 `Accept: text/event-stream` を送ると `unsupported_streaming` エラーを返します。
 
-よく使う `irodori` option は `no_reference`, `caption`, `preset`, `seconds`,
+よく使う `irodori` option は `no_ref`, `caption`, `preset`, `seconds`,
 `duration_scale`, `num_steps`, `seed`, `chunking_enabled`,
 `punctuation_chunking_enabled`, `first_sentence_comma_chunking_enabled`,
 `chunk_min_chars`, `tail_trim_ms`, `tail_silence_trim_ms` です。OpenAI の `speed` は
@@ -149,7 +149,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"落ち着いた明瞭なナレーション","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_ref":true,"caption":"落ち着いた明瞭なナレーション","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
 ```
 
 ```text
@@ -169,7 +169,7 @@ data: {"chunks":1}
 `IRODORI_SERVER_VOICES_DIR` 配下に reference voice を保存できます。対応拡張子は
 `.wav`, `.flac`, `.mp3`, `.m4a`, `.ogg`, `.opus`, `.aac`, `.webm` です。
 speech request の `voice` に管理対象 ID または `{"id":"<voice_id>"}` を指定すると、
-サーバーが `irodori.reference_wav` と `irodori.no_reference=false` を補います。
+サーバーが `irodori.ref_wav` と `irodori.no_ref=false` を補います。
 
 任意のローカルパス、path traversal、remote URL、symlink、latent `.pt` / `.pth` は
 受け付けません。upload 上限は `IRODORI_SERVER_MAX_VOICE_UPLOAD_BYTES` で、既定は 50 MiB

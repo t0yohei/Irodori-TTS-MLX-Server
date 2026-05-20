@@ -23,8 +23,8 @@ from irodori_tts_mlx_server.runtime import (
 class FakeGenerationRequest:
     text: str
     output_wav: str
-    reference_wav: str | None = None
-    no_reference: bool = False
+    ref_wav: str | None = None
+    no_ref: bool = False
     caption: str | None = None
     seconds: float | None = None
     duration_scale: float = 1.0
@@ -38,8 +38,8 @@ class FakeGenerationRequest:
     cfg_min_t: float = 0.5
     cfg_max_t: float = 1.0
     seed: int = 0
-    max_reference_seconds: float | None = 30.0
-    use_context_kv_cache: bool = True
+    max_ref_seconds: float | None = 30.0
+    context_kv_cache: bool = True
 
 
 @dataclass(frozen=True)
@@ -48,8 +48,8 @@ class FakeRuntimeConfig:
     weights_path: str
     text_tokenizer_repo: str | None
     caption_tokenizer_repo: str | None
-    text_max_length: int
-    caption_max_length: int | None
+    max_text_len: int
+    max_caption_len: int | None
     codec: object
 
 
@@ -122,10 +122,10 @@ class ReferenceEncodingMLXRuntime:
 
     def generate(self, request: FakeGenerationRequest) -> object:
         self.requests.append(request)
-        assert request.reference_wav is not None
+        assert request.ref_wav is not None
         self.bridge.encode_reference(
-            request.reference_wav,
-            max_seconds=request.max_reference_seconds,
+            request.ref_wav,
+            max_seconds=request.max_ref_seconds,
             normalize_db=-16.0,
             ensure_max=True,
         )
@@ -168,8 +168,8 @@ def fake_codec_resolver(**_kwargs):
 def fake_module_loader():
     runtime_module = SimpleNamespace(
         DACVAEBridgeConfig=FakeCodecConfig,
-        GenerationRequest=FakeGenerationRequest,
-        MLXDACVAERuntime=FakeMLXRuntime,
+        SamplingRequest=FakeGenerationRequest,
+        InferenceRuntime=FakeMLXRuntime,
         MLXRuntimeConfig=FakeRuntimeConfig,
     )
     layout = SimpleNamespace(
@@ -182,6 +182,18 @@ def fake_module_loader():
 def fake_unsupported_codec_module_loader():
     runtime_module, resolver, codec_resolver = fake_module_loader()
     runtime_module.DACVAEBridgeConfig = FakeUnsupportedCodecConfig
+    return runtime_module, resolver, codec_resolver
+
+
+def fake_missing_inference_runtime_module_loader():
+    runtime_module, resolver, codec_resolver = fake_module_loader()
+    del runtime_module.InferenceRuntime
+    return runtime_module, resolver, codec_resolver
+
+
+def fake_missing_sampling_request_module_loader():
+    runtime_module, resolver, codec_resolver = fake_module_loader()
+    del runtime_module.SamplingRequest
     return runtime_module, resolver, codec_resolver
 
 
@@ -216,8 +228,8 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
         hosted_config(
             text_tokenizer_repo="text-tokenizer",
             caption_tokenizer_repo="caption-tokenizer",
-            text_max_length=128,
-            caption_max_length=64,
+            max_text_len=128,
+            max_caption_len=64,
             codec_path="/codec/semantic-dacvae-mlx.npz",
             codec_device="cpu",
             codec_runtime_mode="mlx-decode",
@@ -234,7 +246,7 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
             speed=2.0,
             irodori={
                 "caption": "warm voice",
-                "no_reference": True,
+                "no_ref": True,
                 "seconds": 1.5,
                 "num_steps": 12,
                 "seed": 0,
@@ -244,8 +256,8 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
                 "cfg_guidance_mode": "joint",
                 "cfg_min_t": 0.25,
                 "cfg_max_t": 0.75,
-                "max_reference_seconds": 10.0,
-                "no_context_kv_cache": True,
+                "max_ref_seconds": 10.0,
+                "context_kv_cache": False,
             },
         )
     )
@@ -258,8 +270,8 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
     assert runtime.config.weights_path == "/weights/model.npz"
     assert runtime.config.text_tokenizer_repo == "text-tokenizer"
     assert runtime.config.caption_tokenizer_repo == "caption-tokenizer"
-    assert runtime.config.text_max_length == 128
-    assert runtime.config.caption_max_length == 64
+    assert runtime.config.max_text_len == 128
+    assert runtime.config.max_caption_len == 64
     assert runtime.config.codec == FakeCodecConfig(
         codec_repo="Aratako/Semantic-DACVAE-Japanese-32dim",
         codec_path="/codec/semantic-dacvae-mlx.npz",
@@ -271,8 +283,8 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
     assert runtime.requests[0] == FakeGenerationRequest(
         text="hello",
         output_wav=runtime.requests[0].output_wav,
-        reference_wav=None,
-        no_reference=True,
+        ref_wav=None,
+        no_ref=True,
         caption="warm voice",
         seconds=1.5,
         duration_scale=0.5,
@@ -286,8 +298,8 @@ def test_mlx_runtime_manager_maps_request_options_and_caches_runtime() -> None:
         cfg_min_t=0.25,
         cfg_max_t=0.75,
         seed=0,
-        max_reference_seconds=10.0,
-        use_context_kv_cache=False,
+        max_ref_seconds=10.0,
+        context_kv_cache=False,
     )
 
 
@@ -307,7 +319,7 @@ def test_mlx_runtime_manager_maps_voicedesign_preset_to_runtime_steps() -> None:
             speed=1.0,
             irodori={
                 "caption": "calm narration, clear diction",
-                "no_reference": True,
+                "no_ref": True,
                 "preset": "balanced",
                 "cfg_scale_caption": 3.5,
             },
@@ -316,8 +328,8 @@ def test_mlx_runtime_manager_maps_voicedesign_preset_to_runtime_steps() -> None:
 
     request = FakeMLXRuntime.instances[0].requests[0]
     assert request.caption == "calm narration, clear diction"
-    assert request.no_reference is True
-    assert request.reference_wav is None
+    assert request.no_ref is True
+    assert request.ref_wav is None
     assert request.num_steps == 24
     assert request.cfg_scale_caption == 3.5
 
@@ -336,7 +348,7 @@ def test_mlx_runtime_manager_maps_ultra_fast_preset_to_runtime_policy() -> None:
             voice="alloy",
             response_format="wav",
             speed=1.0,
-            irodori={"no_reference": True, "preset": "ultra-fast"},
+            irodori={"no_ref": True, "preset": "ultra-fast"},
         )
     )
 
@@ -361,7 +373,7 @@ def test_mlx_runtime_manager_skips_ultra_fast_cap_when_duration_scale_is_explici
             response_format="wav",
             speed=1.0,
             irodori={
-                "no_reference": True,
+                "no_ref": True,
                 "preset": "ultra-fast",
                 "duration_scale": 1.25,
             },
@@ -390,7 +402,7 @@ def test_mlx_runtime_manager_skips_ultra_fast_cap_when_seconds_is_explicit_null(
             response_format="wav",
             speed=1.0,
             irodori={
-                "no_reference": True,
+                "no_ref": True,
                 "preset": "ultra-fast",
                 "seconds": None,
             },
@@ -418,7 +430,7 @@ def test_mlx_runtime_manager_lets_explicit_num_steps_override_preset() -> None:
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_reference": True, "preset": "fast", "num_steps": 32},
+            irodori={"no_ref": True, "preset": "fast", "num_steps": 32},
         )
     )
 
@@ -439,7 +451,7 @@ def test_mlx_runtime_manager_ignores_empty_lora_adapter_option() -> None:
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_reference": True, "lora_adapter": ""},
+            irodori={"no_ref": True, "lora_adapter": ""},
         )
     )
 
@@ -467,7 +479,7 @@ def test_mlx_runtime_manager_rejects_lora_adapter_alias_until_runtime_supports_i
                 voice="voicedesign",
                 response_format="wav",
                 speed=1.0,
-                irodori={"no_reference": True, "lora_adapter": "warm-narration"},
+                irodori={"no_ref": True, "lora_adapter": "warm-narration"},
             )
         )
     assert module_loader_called is False
@@ -487,7 +499,7 @@ def test_mlx_runtime_manager_rejects_path_like_lora_adapter_values() -> None:
                 voice="voicedesign",
                 response_format="wav",
                 speed=1.0,
-                irodori={"no_reference": True, "lora_adapter": "../adapters/warm.safetensors"},
+                irodori={"no_ref": True, "lora_adapter": "../adapters/warm.safetensors"},
             )
         )
 
@@ -506,7 +518,7 @@ def test_mlx_runtime_manager_rejects_non_string_lora_adapter_values() -> None:
                 voice="voicedesign",
                 response_format="wav",
                 speed=1.0,
-                irodori={"no_reference": True, "lora_adapter": 123},
+                irodori={"no_ref": True, "lora_adapter": 123},
             )
         )
 
@@ -645,7 +657,7 @@ def test_mlx_runtime_manager_chunks_long_text_and_concatenates_wav_output() -> N
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
         hosted_config(
-            text_max_length=8,
+            max_text_len=8,
         ),
         runtime_factory=WaveMLXRuntime,
         module_loader=fake_module_loader,
@@ -658,7 +670,7 @@ def test_mlx_runtime_manager_chunks_long_text_and_concatenates_wav_output() -> N
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_reference": True},
+            irodori={"no_ref": True},
         )
     )
 
@@ -672,7 +684,7 @@ def test_mlx_runtime_manager_distributes_explicit_seconds_across_chunks() -> Non
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
         hosted_config(
-            text_max_length=5,
+            max_text_len=5,
         ),
         runtime_factory=WaveMLXRuntime,
         module_loader=fake_module_loader,
@@ -685,7 +697,7 @@ def test_mlx_runtime_manager_distributes_explicit_seconds_across_chunks() -> Non
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_reference": True, "seconds": 4.0},
+            irodori={"no_ref": True, "seconds": 4.0},
         )
     )
 
@@ -697,7 +709,7 @@ def test_mlx_runtime_manager_supports_punctuation_chunking_enabled() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
         hosted_config(
-            text_max_length=256,
+            max_text_len=256,
         ),
         runtime_factory=WaveMLXRuntime,
         module_loader=fake_module_loader,
@@ -713,7 +725,7 @@ def test_mlx_runtime_manager_supports_punctuation_chunking_enabled() -> None:
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_reference": True, "punctuation_chunking_enabled": True},
+            irodori={"no_ref": True, "punctuation_chunking_enabled": True},
         )
     )
 
@@ -728,7 +740,7 @@ def test_mlx_runtime_manager_clamps_punctuation_chunks_to_text_max_length() -> N
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
         hosted_config(
-            text_max_length=8,
+            max_text_len=8,
         ),
         runtime_factory=WaveMLXRuntime,
         module_loader=fake_module_loader,
@@ -741,7 +753,7 @@ def test_mlx_runtime_manager_clamps_punctuation_chunks_to_text_max_length() -> N
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_reference": True, "punctuation_chunking_enabled": True},
+            irodori={"no_ref": True, "punctuation_chunking_enabled": True},
         )
     )
 
@@ -757,7 +769,7 @@ def test_mlx_runtime_manager_can_disable_chunking() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
         hosted_config(
-            text_max_length=5,
+            max_text_len=5,
         ),
         runtime_factory=WaveMLXRuntime,
         module_loader=fake_module_loader,
@@ -770,7 +782,7 @@ def test_mlx_runtime_manager_can_disable_chunking() -> None:
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_reference": True, "chunking_enabled": False},
+            irodori={"no_ref": True, "chunking_enabled": False},
         )
     )
 
@@ -781,7 +793,7 @@ def test_mlx_runtime_manager_applies_tail_artifact_controls_per_chunk() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
         hosted_config(
-            text_max_length=5,
+            max_text_len=5,
         ),
         runtime_factory=WaveMLXRuntime,
         module_loader=fake_module_loader,
@@ -795,7 +807,7 @@ def test_mlx_runtime_manager_applies_tail_artifact_controls_per_chunk() -> None:
             response_format="wav",
             speed=1.0,
             irodori={
-                "no_reference": True,
+                "no_ref": True,
                 "tail_trim_ms": 5,
                 "tail_silence_trim_ms": 5,
                 "tail_silence_keep_ms": 2,
@@ -954,14 +966,14 @@ def managed_reference_cache_options(
 
 def reference_request(**irodori_overrides: object) -> SpeechGenerationRequest:
     cache_info = irodori_overrides.get("_managed_reference_cache")
-    reference_wav = (
+    ref_wav = (
         cache_info["path"]
         if isinstance(cache_info, dict) and isinstance(cache_info.get("path"), str)
         else "/voices/sample.wav"
     )
     irodori = {
-        "reference_wav": reference_wav,
-        "no_reference": False,
+        "ref_wav": ref_wav,
+        "no_ref": False,
     }
     irodori.update(irodori_overrides)
     return SpeechGenerationRequest(
@@ -1172,18 +1184,18 @@ def test_mlx_runtime_manager_rejects_conflicting_reference_options() -> None:
                 voice="alloy",
                 response_format="wav",
                 speed=1.0,
-                irodori={"reference_wav": "/tmp/ref.wav", "no_reference": True},
+                irodori={"ref_wav": "/tmp/ref.wav", "no_ref": True},
             )
         )
 
 
-def test_mlx_runtime_manager_rejects_no_reference_false_without_reference_wav() -> None:
+def test_mlx_runtime_manager_rejects_no_ref_false_without_ref_wav() -> None:
     manager = IrodoriMLXRuntimeManager(
         hosted_config(),
         module_loader=fake_module_loader,
     )
 
-    with pytest.raises(RuntimeRequestError, match="requires irodori.reference_wav"):
+    with pytest.raises(RuntimeRequestError, match="requires irodori.ref_wav"):
         manager.generate_speech(
             SpeechGenerationRequest(
                 model="irodori-tts-mlx",
@@ -1191,7 +1203,7 @@ def test_mlx_runtime_manager_rejects_no_reference_false_without_reference_wav() 
                 voice="alloy",
                 response_format="wav",
                 speed=1.0,
-                irodori={"no_reference": False},
+                irodori={"no_ref": False},
             )
         )
 
@@ -1210,7 +1222,7 @@ def test_mlx_runtime_manager_rejects_invalid_voicedesign_preset() -> None:
                 voice="voicedesign",
                 response_format="wav",
                 speed=1.0,
-                irodori={"no_reference": True, "preset": "draft"},
+                irodori={"no_ref": True, "preset": "draft"},
             )
         )
 
@@ -1229,7 +1241,7 @@ def test_mlx_runtime_manager_rejects_invalid_caption_option_type() -> None:
                 voice="voicedesign",
                 response_format="wav",
                 speed=1.0,
-                irodori={"no_reference": True, "caption": 123},
+                irodori={"no_ref": True, "caption": 123},
             )
         )
 
@@ -1248,7 +1260,7 @@ def test_mlx_runtime_manager_rejects_invalid_cfg_timestep_range() -> None:
                 voice="voicedesign",
                 response_format="wav",
                 speed=1.0,
-                irodori={"no_reference": True, "cfg_min_t": 0.9, "cfg_max_t": 0.1},
+                irodori={"no_ref": True, "cfg_min_t": 0.9, "cfg_max_t": 0.1},
             )
         )
 
@@ -1306,6 +1318,34 @@ def test_create_default_runtime_reports_preload_failure_as_configuration_error(m
                 voice="alloy",
                 response_format="wav",
                 speed=1.0,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("module_loader", "missing_symbol"),
+    [
+        (fake_missing_inference_runtime_module_loader, "InferenceRuntime"),
+        (fake_missing_sampling_request_module_loader, "SamplingRequest"),
+    ],
+)
+def test_mlx_runtime_manager_reports_missing_runtime_api_symbols(
+    module_loader, missing_symbol
+) -> None:
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=module_loader,
+    )
+
+    with pytest.raises(RuntimeUnavailableError, match=missing_symbol):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="alloy",
+                response_format="wav",
+                speed=1.0,
+                irodori={"no_ref": True},
             )
         )
 
