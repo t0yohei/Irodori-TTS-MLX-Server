@@ -771,6 +771,17 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
     )
 
 
+def _speech_audio_done_payload() -> dict[str, Any]:
+    return {
+        "type": "speech.audio.done",
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+
+
 def _sse_error_event(message: str, *, code: str, param: str | None = None) -> str:
     return _sse_event(
         "error",
@@ -1133,7 +1144,7 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                         return
                     else:
                         await queue.put(
-                            _sse_event("speech.audio.done", {"type": "speech.audio.done"})
+                            _sse_event("speech.audio.done", _speech_audio_done_payload())
                         )
                     finally:
                         await queue.put(None)

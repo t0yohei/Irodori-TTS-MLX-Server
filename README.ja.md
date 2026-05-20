@@ -154,11 +154,13 @@ event: speech.audio.delta
 data: {"type":"speech.audio.delta","audio":"..."}
 
 event: speech.audio.done
-data: {"type":"speech.audio.done"}
+data: {"type":"speech.audio.done","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}
 ```
 
 `audio` には chunk 単位の base64 encoded 音声が入ります。client は各
 `speech.audio.delta` を decode して再生 queue に積みながら、後続 chunk の生成を待てます。
+ローカルサーバーは OpenAI token accounting を行わないため、終端 event の
+`usage` は schema 互換用の zero-valued object です。
 
 ## 管理対象 reference voice
 

@@ -53,6 +53,7 @@ def test_openai_client_examples_cover_common_usage_paths() -> None:
         "speech.audio.delta",
         "speech.audio.done",
         "audio",
+        "usage",
         "Accept: text/event-stream",
         "FFmpeg",
     ):

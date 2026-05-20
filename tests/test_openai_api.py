@@ -125,6 +125,17 @@ def sse_events(body: str) -> list[tuple[str, dict[str, object]]]:
     return events
 
 
+def speech_audio_done_payload() -> dict[str, object]:
+    return {
+        "type": "speech.audio.done",
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+
+
 def test_v1_models_returns_openai_compatible_model_list() -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).get("/v1/models")
 
@@ -1713,7 +1724,7 @@ def test_audio_speech_sse_stream_emits_each_generated_chunk_as_audio_delta() -> 
     first_chunk = events[0][1]
     assert first_chunk["type"] == "speech.audio.delta"
     assert base64.b64decode(first_chunk["audio"]) == wav_bytes()
-    assert events[2][1] == {"type": "speech.audio.done"}
+    assert events[2][1] == speech_audio_done_payload()
 
 
 def test_audio_speech_sse_stream_supports_punctuation_chunking_enabled() -> None:
@@ -1900,7 +1911,7 @@ def test_audio_speech_sse_stream_respects_disabled_chunking() -> None:
         "speech.audio.done",
     ]
     assert events[0][1]["type"] == "speech.audio.delta"
-    assert events[1][1] == {"type": "speech.audio.done"}
+    assert events[1][1] == speech_audio_done_payload()
 
 
 def test_falsey_runtime_injection_is_preserved() -> None:

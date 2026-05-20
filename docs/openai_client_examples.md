@@ -174,9 +174,10 @@ event: speech.audio.delta
 data: {"type":"speech.audio.delta","audio":"..."}
 
 event: speech.audio.done
-data: {"type":"speech.audio.done"}
+data: {"type":"speech.audio.done","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}
 ~~~
 
 `audio` contains base64-encoded audio bytes for the completed text chunk.
 Clients can decode and enqueue each `speech.audio.delta` while the server generates
-later chunks.
+later chunks. The local server does not perform OpenAI token accounting, so the
+terminal event includes a zero-valued `usage` object for schema compatibility.
