@@ -595,9 +595,11 @@ def _split_text_by_punctuation_plan(
     chunks: list[str] = []
     current = ""
     for segment in _iter_punctuation_segments(text):
-        if current.rstrip().endswith("。"):
+        if _ends_with_period_boundary(current):
             closing, segment = _split_leading_closing_punctuation(segment)
             current += closing
+            if closing and segment.strip() == "":
+                continue
             chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
             current = ""
             if segment.strip() == "":
@@ -635,11 +637,18 @@ def _lstrip_non_whitespace(text: str) -> str:
 
 
 def _split_leading_closing_punctuation(text: str) -> tuple[str, str]:
-    closing_chars = set("」』）)]】〕〉》｝}＞>？”’”\"'")
+    closing_chars = _CLOSING_PUNCTUATION_CHARS
     index = 0
     while index < len(text) and text[index] in closing_chars:
         index += 1
     return text[:index], text[index:]
+
+
+_CLOSING_PUNCTUATION_CHARS = set("」』）)]】〕〉》｝}＞>！？!?？”’”\"'")
+
+
+def _ends_with_period_boundary(text: str) -> bool:
+    return text.rstrip().rstrip("".join(_CLOSING_PUNCTUATION_CHARS)).endswith("。")
 
 
 def _iter_punctuation_segments(text: str) -> list[str]:

@@ -599,6 +599,14 @@ def test_split_text_for_generation_punctuation_mode_keeps_closers_with_period() 
     ) == ['"こんにちは。"', "次です。", "終わり。'"]
 
 
+def test_split_text_for_generation_punctuation_mode_keeps_terminal_marks_with_period() -> None:
+    assert split_text_for_generation(
+        "こんにちは。！？次です。",
+        max_chars=256,
+        chunk_mode="punctuation",
+    ) == ["こんにちは。！？", "次です。"]
+
+
 def test_mlx_runtime_manager_chunks_long_text_and_concatenates_wav_output() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
