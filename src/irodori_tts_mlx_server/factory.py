@@ -1111,26 +1111,22 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                 queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=1)
 
                 async def produce_events() -> None:
-                    completed = 0
                     try:
                         async with synthesis_limiter.slot():
-                            for index, chunk_request in enumerate(chunk_requests):
+                            for chunk_request in chunk_requests:
                                 converted_result = await _generate_converted_speech(
                                     speech_runtime,
                                     request,
                                     chunk_request,
                                 )
-                                completed += 1
                                 await queue.put(
                                     _sse_event(
-                                        "audio.delta",
+                                        "speech.audio.delta",
                                         {
-                                            "index": index,
-                                            "delta": base64.b64encode(
+                                            "type": "speech.audio.delta",
+                                            "audio": base64.b64encode(
                                                 converted_result.audio
                                             ).decode("ascii"),
-                                            "response_format": request.response_format,
-                                            "media_type": converted_result.media_type,
                                         },
                                     )
                                 )
@@ -1138,7 +1134,9 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                         await queue.put(_sse_openai_error_event(exc))
                         return
                     else:
-                        await queue.put(_sse_event("audio.done", {"chunks": completed}))
+                        await queue.put(
+                            _sse_event("speech.audio.done", {"type": "speech.audio.done"})
+                        )
                     finally:
                         await queue.put(None)
 

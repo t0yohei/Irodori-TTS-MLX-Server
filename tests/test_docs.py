@@ -51,9 +51,9 @@ def test_openai_client_examples_cover_common_usage_paths() -> None:
         'response_format="flac"',
         '"stream_format": "audio"',
         '"stream_format": "sse"',
-        "audio.delta",
-        "audio.done",
-        "delta",
+        "speech.audio.delta",
+        "speech.audio.done",
+        "audio",
         "Accept: text/event-stream",
         "FFmpeg",
     ):

@@ -189,13 +189,13 @@ punctuation chunk planner.
 The response uses Server-Sent Events:
 
 ~~~text
-event: audio.delta
-data: {"index":0,"response_format":"wav","media_type":"audio/wav","delta":"..."}
+event: speech.audio.delta
+data: {"type":"speech.audio.delta","audio":"..."}
 
-event: audio.done
-data: {"chunks":1}
+event: speech.audio.done
+data: {"type":"speech.audio.done"}
 ~~~
 
-`delta` contains base64-encoded audio bytes for the completed text chunk.
-Clients can decode and enqueue each `audio.delta` while the server generates
+`audio` contains base64-encoded audio bytes for the completed text chunk.
+Clients can decode and enqueue each `speech.audio.delta` while the server generates
 later chunks.

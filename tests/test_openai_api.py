@@ -1705,13 +1705,15 @@ def test_audio_speech_sse_stream_emits_each_generated_chunk_as_audio_delta() -> 
         1.5,
     ]
     events = sse_events(response.text)
-    assert [event for event, _data in events] == ["audio.delta", "audio.delta", "audio.done"]
+    assert [event for event, _data in events] == [
+        "speech.audio.delta",
+        "speech.audio.delta",
+        "speech.audio.done",
+    ]
     first_chunk = events[0][1]
-    assert first_chunk["index"] == 0
-    assert first_chunk["response_format"] == "wav"
-    assert first_chunk["media_type"] == "audio/wav"
-    assert base64.b64decode(first_chunk["delta"]) == wav_bytes()
-    assert events[2][1] == {"chunks": 2}
+    assert first_chunk["type"] == "speech.audio.delta"
+    assert base64.b64decode(first_chunk["audio"]) == wav_bytes()
+    assert events[2][1] == {"type": "speech.audio.done"}
 
 
 def test_audio_speech_sse_stream_supports_punctuation_chunking_enabled() -> None:
@@ -1744,12 +1746,16 @@ def test_audio_speech_sse_stream_supports_punctuation_chunking_enabled() -> None
     ]
     events = sse_events(response.text)
     assert [event for event, _data in events] == [
-        "audio.delta",
-        "audio.delta",
-        "audio.delta",
-        "audio.done",
+        "speech.audio.delta",
+        "speech.audio.delta",
+        "speech.audio.delta",
+        "speech.audio.done",
     ]
-    assert [data["index"] for _event, data in events[:3]] == [0, 1, 2]
+    assert [data["type"] for _event, data in events[:3]] == [
+        "speech.audio.delta",
+        "speech.audio.delta",
+        "speech.audio.delta",
+    ]
 
 
 def test_audio_speech_sse_stream_supports_first_sentence_comma_chunking() -> None:
@@ -1780,12 +1786,16 @@ def test_audio_speech_sse_stream_supports_first_sentence_comma_chunking() -> Non
     ]
     events = sse_events(response.text)
     assert [event for event, _data in events] == [
-        "audio.delta",
-        "audio.delta",
-        "audio.delta",
-        "audio.done",
+        "speech.audio.delta",
+        "speech.audio.delta",
+        "speech.audio.delta",
+        "speech.audio.done",
     ]
-    assert [data["index"] for _event, data in events[:3]] == [0, 1, 2]
+    assert [data["type"] for _event, data in events[:3]] == [
+        "speech.audio.delta",
+        "speech.audio.delta",
+        "speech.audio.delta",
+    ]
 
 
 def test_audio_speech_sse_stream_rejects_invalid_first_sentence_comma_chunking() -> None:
@@ -1885,9 +1895,12 @@ def test_audio_speech_sse_stream_respects_disabled_chunking() -> None:
     assert response.status_code == 200
     assert [request.input for request in runtime.requests] == ["hello. goodbye."]
     events = sse_events(response.text)
-    assert [event for event, _data in events] == ["audio.delta", "audio.done"]
-    assert events[0][1]["index"] == 0
-    assert events[1][1] == {"chunks": 1}
+    assert [event for event, _data in events] == [
+        "speech.audio.delta",
+        "speech.audio.done",
+    ]
+    assert events[0][1]["type"] == "speech.audio.delta"
+    assert events[1][1] == {"type": "speech.audio.done"}
 
 
 def test_falsey_runtime_injection_is_preserved() -> None:
@@ -1977,8 +1990,8 @@ def test_audio_speech_accepts_sse_accept_header() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert [event for event, _data in sse_events(response.text)] == [
-        "audio.delta",
-        "audio.done",
+        "speech.audio.delta",
+        "speech.audio.done",
     ]
 
 
@@ -2242,8 +2255,8 @@ def test_default_app_reports_invalid_integer_env_as_runtime_unavailable(monkeypa
         "configured": False,
         "loaded": False,
         "load_state": "failed",
-            "model_id": "irodori-tts-mlx",
-            "last_load_error": "IRODORI_MLX_MAX_TEXT_LEN must be an integer.",
+        "model_id": "irodori-tts-mlx",
+        "last_load_error": "IRODORI_MLX_MAX_TEXT_LEN must be an integer.",
     }
     assert health_response.json()["server"]["auth_enabled"] is False
     assert speech_response.status_code == 503

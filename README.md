@@ -273,8 +273,8 @@ normal punctuation planner.
 
 For lower perceived latency, `POST /v1/audio/speech` supports OpenAI-style
 Server-Sent Events. It reuses the same speech request shape and chunking
-controls, then emits one `audio.delta` event per synthesized text chunk and a
-final `audio.done` event:
+controls, then emits one `speech.audio.delta` event per synthesized text chunk
+and a final `speech.audio.done` event:
 
 ```bash
 curl -N http://127.0.0.1:8000/v1/audio/speech \
@@ -285,14 +285,14 @@ curl -N http://127.0.0.1:8000/v1/audio/speech \
 ```
 
 ```text
-event: audio.delta
-data: {"index":0,"response_format":"wav","media_type":"audio/wav","delta":"..."}
+event: speech.audio.delta
+data: {"type":"speech.audio.delta","audio":"..."}
 
-event: audio.done
-data: {"chunks":1}
+event: speech.audio.done
+data: {"type":"speech.audio.done"}
 ```
 
-Each `delta` value contains base64-encoded audio for the completed text chunk,
+Each `audio` value contains base64-encoded audio for the completed text chunk,
 so clients can decode and enqueue chunks while later chunks are still
 generating.
 
