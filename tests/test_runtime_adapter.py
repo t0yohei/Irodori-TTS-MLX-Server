@@ -599,6 +599,15 @@ def test_split_text_for_generation_punctuation_mode_keeps_closers_with_period() 
     ) == ['"こんにちは。"', "次です。", "終わり。'"]
 
 
+def test_split_text_for_generation_punctuation_mode_keeps_overflow_closers_attached() -> None:
+    assert split_text_for_generation(
+        'ab。"c',
+        max_chars=3,
+        chunk_mode="punctuation",
+        chunk_hard_max_chars=3,
+    ) == ['ab。"', "c"]
+
+
 def test_split_text_for_generation_punctuation_mode_keeps_terminal_marks_with_period() -> None:
     assert split_text_for_generation(
         "こんにちは。！？次です。",

@@ -37,6 +37,7 @@ MANAGED_REFERENCE_CACHE_OPTION = "_managed_reference_cache"
 DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS = 12
 DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS = 40
 DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS = 120
+PUNCTUATION_CLOSING_CHARS = set("」』）)]】〕〉》｝}＞>？”’”\"'!?！？")
 logger = logging.getLogger("irodori_tts_mlx_server.runtime")
 
 
@@ -595,15 +596,16 @@ def _split_text_by_punctuation_plan(
     chunks: list[str] = []
     current = ""
     for segment in _iter_punctuation_segments(text):
-        if _ends_with_period_boundary(current):
+        if _ends_with_japanese_period_before_closers(current):
             closing, segment = _split_leading_closing_punctuation(segment)
             current += closing
-            if closing and segment.strip() == "":
-                continue
-            chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
-            current = ""
             if segment.strip() == "":
                 continue
+            if closing:
+                chunks.append(current)
+            else:
+                chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
+            current = ""
             segment = _lstrip_non_whitespace(segment)
         if len(segment) > hard_max_chars:
             if current:
@@ -637,18 +639,17 @@ def _lstrip_non_whitespace(text: str) -> str:
 
 
 def _split_leading_closing_punctuation(text: str) -> tuple[str, str]:
-    closing_chars = _CLOSING_PUNCTUATION_CHARS
     index = 0
-    while index < len(text) and text[index] in closing_chars:
+    while index < len(text) and text[index] in PUNCTUATION_CLOSING_CHARS:
         index += 1
     return text[:index], text[index:]
 
 
-_CLOSING_PUNCTUATION_CHARS = set("」』）)]】〕〉》｝}＞>！？!?？”’”\"'")
-
-
-def _ends_with_period_boundary(text: str) -> bool:
-    return text.rstrip().rstrip("".join(_CLOSING_PUNCTUATION_CHARS)).endswith("。")
+def _ends_with_japanese_period_before_closers(text: str) -> bool:
+    stripped = text.rstrip()
+    while stripped and stripped[-1] in PUNCTUATION_CLOSING_CHARS:
+        stripped = stripped[:-1]
+    return stripped.endswith("。")
 
 
 def _iter_punctuation_segments(text: str) -> list[str]:
