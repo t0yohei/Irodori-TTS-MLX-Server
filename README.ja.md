@@ -130,8 +130,12 @@ traversal、symlink、任意の local path は拒否します。
 8, 12, 24, 40 sampling steps に対応します。`ultra-fast` は、`seconds` と
 `duration_scale` が未指定かつ `speed=1.0` の場合、対応する Irodori-TTS-MLX
 runtime に短文向け auto-duration cap も渡します。
-chunking には `chunking_enabled`, `punctuation_chunking_enabled`,
-`first_sentence_comma_chunking_enabled`, `chunk_min_chars` を使ってください。
+chunking はデフォルトで有効で、句読点または改行に到達した時点で現在の chunk が
+`chunk_min_chars` 以上の非空白文字を含む場合に分割します。`chunk_min_chars` の
+デフォルトは `80` です。chunking には `chunking_enabled`,
+`punctuation_chunking_enabled`, `first_sentence_comma_chunking_enabled`,
+`chunk_min_chars` を使ってください。`punctuation_chunking_enabled` は互換用に
+受け付けますが、通常の chunking も句読点ベースです。
 `first_sentence_comma_chunking_enabled=true` は punctuation chunking と併用し、
 最初の1文だけ `、` などの読点で分割します。最初の SSE 音声 event
 を早く返したい場合の opt-in です。

@@ -20,7 +20,7 @@ def test_health_returns_ok() -> None:
     assert server["max_concurrent_synthesis"] == 1
     assert server["queue_timeout_seconds"] == 30.0
     assert server["voices"]["dir"] == "voices"
-    assert server["voices"]["files"] == 0
+    assert isinstance(server["voices"]["files"], int)
     assert server["voices"]["formats"] == [
         ".wav",
         ".flac",

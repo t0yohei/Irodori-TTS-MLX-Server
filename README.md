@@ -260,17 +260,20 @@ requests cannot load arbitrary local adapter files. LoRA support should be added
 only after the MLX runtime exposes an adapter field plus clear alias/allowlist
 and cache/reload semantics.
 
-Long text chunking is enabled by default. The server splits text on punctuation
-before falling back to hard character slices, using
-`IRODORI_MLX_MAX_TEXT_LEN` as the hard fallback size. Set
-`irodori.chunking_enabled=false` to send the full text to the runtime unchanged.
+Long text chunking is enabled by default. The server splits text when a
+punctuation or line-break boundary is reached after at least
+`chunk_min_chars` non-space characters, then falls back to hard character
+slices using `IRODORI_MLX_MAX_TEXT_LEN` as the hard fallback size. The default
+`chunk_min_chars` is `80`. Set `irodori.chunking_enabled=false` to send the
+full text to the runtime unchanged.
 When `irodori.seconds` is
 omitted, each chunk also omits `seconds` so Irodori-TTS-MLX can use its duration
 fallback or predicted-duration behavior. When `irodori.seconds` is explicit, the
 server distributes that total duration across chunks by character count.
-Set `irodori.punctuation_chunking_enabled=true` to use punctuation-oriented
-automatic chunk planning. In that mode, Japanese full stops (`。`) are forced
-boundaries, and `chunk_min_chars` controls short-segment merging. Set
+`irodori.punctuation_chunking_enabled` remains accepted as a compatibility flag;
+chunking uses punctuation-oriented planning by default. `chunk_min_chars`
+controls the minimum non-space characters before a punctuation boundary can
+split. Set
 `irodori.first_sentence_comma_chunking_enabled=true` with punctuation chunking
 to split only the first sentence on Japanese commas such as `、`; this can reduce
 time to the first SSE audio event while later sentences keep the
