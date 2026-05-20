@@ -135,28 +135,9 @@ The OpenAI Python client does not need server-specific transport code. Use
 ## Streaming
 
 The OpenAI-compatible `/v1/audio/speech` route supports OpenAI-style streaming.
-Use `stream_format="audio"` to receive audio bytes on the response body, or
-`stream_format="sse"` to receive Server-Sent Events from the same route.
-
-Audio byte streaming is useful for clients that can play the response body
-directly:
-
-~~~bash
-curl http://127.0.0.1:8000/v1/audio/speech \\
-  -H 'Content-Type: application/json' \\
-  -H 'Authorization: Bearer <token>' \\
-  -d '{
-    "model": "irodori-tts-mlx",
-    "input": "This response streams audio bytes.",
-    "voice": "voicedesign",
-    "response_format": "wav",
-    "stream_format": "audio",
-    "irodori": {
-      "no_ref": true,
-      "caption": "clear studio narration"
-    }
-  }' | ffplay -i -
-~~~
+Use `stream_format="sse"` or `Accept: text/event-stream` to receive
+Server-Sent Events from the same route. `stream_format="audio"` is not
+supported.
 
 SSE streaming emits one audio delta per synthesized text chunk:
 

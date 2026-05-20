@@ -12,8 +12,7 @@ The current public surface includes:
 
 - `GET /health`
 - `GET /v1/models`
-- `POST /v1/audio/speech` with non-streaming, audio-byte streaming, and
-  Server-Sent Events modes
+- `POST /v1/audio/speech` with non-streaming and Server-Sent Events modes
 - `GET`, `POST`, `GET by id`, `PUT`, and `DELETE` for
   `/v1/audio/voices`
 - OpenAI-style JSON errors for validation, auth, queue, encoder, and runtime
@@ -30,7 +29,7 @@ converted Irodori-TTS-MLX weights are configured.
   error codes.
 - [docs/openai_client_examples.md](docs/openai_client_examples.md): `curl` and
   Python OpenAI client examples, bearer auth, FFmpeg-backed response formats,
-  audio byte streaming, and SSE speech streaming.
+  and SSE speech streaming.
 - [docs/deployment.md](docs/deployment.md): production-ish local deployment on
   Apple Silicon, launchd templates, auth, queue controls, health checks, logs,
   and operational environment variables.
@@ -115,7 +114,7 @@ checkout setup walkthrough, converted-weights layout contract, local run
 commands, speech `curl` example, and common error codes.
 See [docs/openai_client_examples.md](docs/openai_client_examples.md) for
 OpenAI-compatible `curl` and Python client examples, including bearer auth,
-FFmpeg-backed response formats, audio byte streaming, and SSE speech streaming.
+FFmpeg-backed response formats and SSE speech streaming.
 See [docs/deployment.md](docs/deployment.md) for production-ish local deployment
 guidance covering Apple Silicon host assumptions, bearer auth, queue controls,
 health checks, logs, and the packaged launchd templates under
@@ -232,8 +231,8 @@ top-level runtime option aliases such as `no_ref`, `seconds`, `duration_scale`,
 work without optional encoders. `mp3`, `flac`, `opus`, and `aac` use FFmpeg
 when it is installed; otherwise the server returns an OpenAI-style error with
 setup guidance. The OpenAI-compatible `/v1/audio/speech` route supports
-`stream_format="audio"` for audio byte streaming and `stream_format="sse"`
-or `Accept: text/event-stream` for Server-Sent Events.
+`stream_format="sse"` or `Accept: text/event-stream` for Server-Sent
+Events. `stream_format="audio"` is not supported.
 
 Supported `irodori` runtime options include `ref_wav`, `no_ref`,
 `caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,

@@ -52,9 +52,8 @@ remote URLs, symlinks, and latent `.pt`/`.pth` references.
 The public MVP does not include:
 
 - Model-token or sample-level streaming synthesis. The OpenAI-compatible
-  `/v1/audio/speech` route supports audio byte streaming and chunk-level SSE,
-  but the MLX runtime still generates complete audio for each request or text
-  chunk.
+  `/v1/audio/speech` route supports chunk-level SSE, but the MLX runtime still
+  generates complete audio for each request or text chunk.
 - Dynamic LoRA loading or training controls.
 - Multi-worker scheduling or horizontal scaling beyond the local synthesis
   semaphore.

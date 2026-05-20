@@ -83,7 +83,7 @@ class AudioSpeechRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
     irodori: dict[str, Any] = Field(default_factory=dict)
     stream: bool = False
-    stream_format: Literal["audio", "sse"] | None = None
+    stream_format: Literal["sse"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -844,14 +844,6 @@ async def _generate_converted_speech(
         ) from exc
 
 
-def _iter_audio_bytes(audio: bytes, *, chunk_size: int = 64 * 1024) -> AsyncIterator[bytes]:
-    async def chunks() -> AsyncIterator[bytes]:
-        for offset in range(0, len(audio), chunk_size):
-            yield audio[offset : offset + chunk_size]
-
-    return chunks()
-
-
 def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None = None) -> FastAPI:
     speech_runtime = runtime if runtime is not None else create_default_runtime()
     server_configuration_error: ServerConfigurationError | None = None
@@ -1099,7 +1091,13 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
             request.stream_format == "sse"
             or "text/event-stream" in api_request.headers.get("accept", "")
         )
-        wants_audio_stream = request.stream or request.stream_format == "audio"
+        if request.stream and not wants_sse:
+            raise openai_error(
+                "Only stream_format='sse' is supported for speech streaming.",
+                status_code=400,
+                param="stream",
+                code="unsupported_streaming",
+            )
         if wants_sse:
             chunk_requests = _chunked_speech_generation_requests(
                 request,
@@ -1167,13 +1165,6 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
                 speech_runtime,
                 request,
                 generation_request,
-            )
-
-        if wants_audio_stream:
-            return StreamingResponse(
-                _iter_audio_bytes(converted_result.audio),
-                media_type=converted_result.media_type,
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
         return Response(content=converted_result.audio, media_type=converted_result.media_type)

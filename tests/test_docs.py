@@ -49,7 +49,6 @@ def test_openai_client_examples_cover_common_usage_paths() -> None:
         "extra_body",
         'response_format="wav"',
         'response_format="flac"',
-        '"stream_format": "audio"',
         '"stream_format": "sse"',
         "speech.audio.delta",
         "speech.audio.done",

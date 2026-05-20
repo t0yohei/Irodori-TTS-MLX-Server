@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from openai import AuthenticationError, OpenAI
+from openai import AuthenticationError, BadRequestError, OpenAI
 
 from irodori_tts_mlx_server import create_app
 from irodori_tts_mlx_server.config import ServerConfig
@@ -119,29 +119,23 @@ def test_openai_python_client_downloads_non_streaming_speech(tmp_path: Path) -> 
     ]
 
 
-def test_openai_python_client_downloads_audio_stream_response() -> None:
+def test_openai_python_client_rejects_non_sse_streaming() -> None:
     runtime = CompatibilityRuntime()
     client = openai_client(runtime)
 
-    response = client.audio.speech.create(
-        model="irodori-tts-mlx",
-        voice="voicedesign",
-        input="Streaming synthesis is OpenAI-compatible.",
-        response_format="wav",
-        extra_body={"stream": True, "irodori": {"no_ref": True}},
-    )
-
-    assert response.content == wav_bytes()
-    assert runtime.requests == [
-        SpeechGenerationRequest(
+    with pytest.raises(BadRequestError) as exc_info:
+        client.audio.speech.create(
             model="irodori-tts-mlx",
-            input="Streaming synthesis is OpenAI-compatible.",
             voice="voicedesign",
+            input="Only SSE speech streaming is supported.",
             response_format="wav",
-            speed=1.0,
-            irodori={"no_ref": True},
+            extra_body={"stream": True, "irodori": {"no_ref": True}},
         )
-    ]
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "unsupported_streaming"
+    assert exc_info.value.param == "stream"
+    assert runtime.requests == []
 
 
 def test_openai_python_client_receives_converted_pcm_response() -> None:

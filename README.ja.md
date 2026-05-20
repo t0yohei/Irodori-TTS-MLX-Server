@@ -11,7 +11,7 @@ Irodori-TTS-MLX で実装・検証済みの機能に絞った Apple Silicon 向�
 
 - `GET /health`
 - `GET /v1/models`
-- `POST /v1/audio/speech`（非 streaming、音声 byte streaming、Server-Sent Events）
+- `POST /v1/audio/speech`（非 streaming、Server-Sent Events）
 - `/v1/audio/voices` 配下の `GET`, `POST`, `GET by id`, `PUT`, `DELETE`
 
 モデル重みを設定しなくてもパッケージは import できます。その場合、`/health` は
@@ -24,7 +24,7 @@ Irodori-TTS-MLX で実装・検証済みの機能に絞った Apple Silicon 向�
 - [docs/real_model_setup.md](docs/real_model_setup.md): 初回セットアップ、変換済み
   weights layout、ローカル起動、speech smoke、よくあるエラー。
 - [docs/openai_client_examples.md](docs/openai_client_examples.md): `curl` と Python
-  OpenAI client の例、bearer auth、FFmpeg 形式、音声 byte streaming、SSE speech streaming。
+  OpenAI client の例、bearer auth、FFmpeg 形式、SSE speech streaming。
 - [docs/deployment.md](docs/deployment.md): Apple Silicon ローカル運用、launchd、
   bearer auth、queue、health check、ログ、環境変数。
 - [docs/upstream_compatibility.md](docs/upstream_compatibility.md): upstream server
@@ -113,8 +113,8 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 
 `wav` と `pcm` は追加エンコーダなしで使えます。`mp3`, `flac`, `opus`, `aac` は
 サーバーホストに FFmpeg が必要です。OpenAI 互換の `/v1/audio/speech` route は
-`stream_format="audio"` で音声 byte streaming、`stream_format="sse"` または
-`Accept: text/event-stream` で Server-Sent Events を返します。
+`stream_format="sse"` または `Accept: text/event-stream` で Server-Sent Events
+を返します。`stream_format="audio"` は対応しません。
 
 よく使う `irodori` option は `no_ref`, `caption`, `preset`, `seconds`,
 `duration_scale`, `num_steps`, `seed`, `chunking_enabled`,
@@ -138,8 +138,8 @@ chunking には `chunking_enabled`, `punctuation_chunking_enabled`,
 
 低遅延に再生を始めたい用途向けに、`POST /v1/audio/speech` は OpenAI-style の
 Server-Sent Events も提供します。同じ speech request 形式と chunking 設定を使い、
-生成済みのテキスト chunk ごとに `audio.delta` event、最後に `audio.done` event を
-返します。
+生成済みのテキスト chunk ごとに `speech.audio.delta` event、最後に
+`speech.audio.done` event を返します。
 
 ```bash
 curl -N http://127.0.0.1:8000/v1/audio/speech \
@@ -150,15 +150,15 @@ curl -N http://127.0.0.1:8000/v1/audio/speech \
 ```
 
 ```text
-event: audio.delta
-data: {"index":0,"response_format":"wav","media_type":"audio/wav","delta":"..."}
+event: speech.audio.delta
+data: {"type":"speech.audio.delta","audio":"..."}
 
-event: audio.done
-data: {"chunks":1}
+event: speech.audio.done
+data: {"type":"speech.audio.done"}
 ```
 
-`delta` には chunk 単位の base64 encoded 音声が入ります。client は各
-`audio.delta` を decode して再生 queue に積みながら、後続 chunk の生成を待てます。
+`audio` には chunk 単位の base64 encoded 音声が入ります。client は各
+`speech.audio.delta` を decode して再生 queue に積みながら、後続 chunk の生成を待てます。
 
 ## 管理対象 reference voice
 

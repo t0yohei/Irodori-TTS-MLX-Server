@@ -1937,7 +1937,7 @@ def test_audio_speech_offloads_generation_and_conversion_to_threadpool(monkeypat
     assert calls[1][0] == app_module.convert_audio_response
 
 
-def test_audio_speech_streams_audio_bytes_with_stream_true() -> None:
+def test_audio_speech_rejects_non_sse_stream_true() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech",
@@ -1950,13 +1950,17 @@ def test_audio_speech_streams_audio_bytes_with_stream_true() -> None:
         },
     )
 
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "audio/wav"
-    assert response.content == wav_bytes()
-    assert len(runtime.requests) == 1
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "message": "Only stream_format='sse' is supported for speech streaming.",
+        "type": "invalid_request_error",
+        "param": "stream",
+        "code": "unsupported_streaming",
+    }
+    assert runtime.requests == []
 
 
-def test_audio_speech_streams_audio_bytes_with_audio_stream_format() -> None:
+def test_audio_speech_rejects_audio_stream_format() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech",
@@ -1969,10 +1973,10 @@ def test_audio_speech_streams_audio_bytes_with_audio_stream_format() -> None:
         },
     )
 
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "audio/wav"
-    assert response.content == wav_bytes()
-    assert len(runtime.requests) == 1
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+    assert response.json()["error"]["message"] == "Input should be 'sse'"
+    assert runtime.requests == []
 
 
 def test_audio_speech_accepts_sse_accept_header() -> None:
@@ -2009,7 +2013,7 @@ def test_audio_speech_rejects_unknown_stream_format() -> None:
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
-    assert response.json()["error"]["message"] == "Input should be 'audio' or 'sse'"
+    assert response.json()["error"]["message"] == "Input should be 'sse'"
 
 
 def test_audio_speech_stream_chunks_route_is_removed() -> None:
