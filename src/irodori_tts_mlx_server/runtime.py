@@ -37,6 +37,7 @@ MANAGED_REFERENCE_CACHE_OPTION = "_managed_reference_cache"
 DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS = 12
 DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS = 40
 DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS = 120
+PUNCTUATION_CLOSING_CHARS = set("」』）)]】〕〉》｝}＞>？”’”\"'!?！？")
 logger = logging.getLogger("irodori_tts_mlx_server.runtime")
 
 
@@ -494,6 +495,21 @@ def _num_steps_option(options: dict[str, Any]) -> int:
     return _int_option(options, "num_steps", default=default)
 
 
+def _chunk_mode_option(options: dict[str, Any]) -> str:
+    legacy_mode = _string_option(options, "chunk_mode", default="max_chars")
+    if legacy_mode not in {"max_chars", "punctuation"}:
+        raise RuntimeRequestError("irodori.chunk_mode must be one of 'max_chars', 'punctuation'.")
+    if "punctuation_chunking_enabled" not in options:
+        return "punctuation" if legacy_mode == "punctuation" else "max_chars"
+    enabled = _bool_option(options, "punctuation_chunking_enabled")
+    expected_mode = "punctuation" if enabled else "max_chars"
+    if "chunk_mode" in options and legacy_mode != expected_mode:
+        raise RuntimeRequestError(
+            "irodori.punctuation_chunking_enabled conflicts with irodori.chunk_mode."
+        )
+    return expected_mode
+
+
 def _runtime_generation_request_kwargs(runtime_module: Any, **kwargs: Any) -> dict[str, Any]:
     signature = inspect.signature(runtime_module.GenerationRequest)
     return {key: value for key, value in kwargs.items() if key in signature.parameters}
@@ -534,7 +550,7 @@ def split_text_for_generation(
     if chunk_mode not in {"max_chars", "punctuation"}:
         raise RuntimeRequestError("irodori.chunk_mode must be one of 'max_chars', 'punctuation'.")
     if max_chars < 1:
-        raise RuntimeRequestError("irodori.chunk_max_chars must be >= 1.")
+        raise RuntimeRequestError("max_chars must be >= 1.")
     if chunk_min_chars < 0:
         raise RuntimeRequestError("irodori.chunk_min_chars must be >= 0.")
     if chunk_target_chars < 1:
@@ -574,12 +590,23 @@ def _split_text_by_punctuation_plan(
     target_chars: int,
     hard_max_chars: int,
 ) -> list[str]:
-    if len(text) <= target_chars and len(text) <= hard_max_chars:
+    if "。" not in text and len(text) <= target_chars and len(text) <= hard_max_chars:
         return [text]
 
     chunks: list[str] = []
     current = ""
     for segment in _iter_punctuation_segments(text):
+        if _ends_with_japanese_period_before_closers(current):
+            closing, segment = _split_leading_closing_punctuation(segment)
+            current += closing
+            if segment.strip() == "":
+                continue
+            if closing:
+                chunks.append(current)
+            else:
+                chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
+            current = ""
+            segment = _lstrip_non_whitespace(segment)
         if len(segment) > hard_max_chars:
             if current:
                 chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
@@ -609,6 +636,20 @@ def _split_text_by_punctuation_plan(
 
 def _lstrip_non_whitespace(text: str) -> str:
     return text if text.strip() == "" else text.lstrip()
+
+
+def _split_leading_closing_punctuation(text: str) -> tuple[str, str]:
+    index = 0
+    while index < len(text) and text[index] in PUNCTUATION_CLOSING_CHARS:
+        index += 1
+    return text[:index], text[index:]
+
+
+def _ends_with_japanese_period_before_closers(text: str) -> bool:
+    stripped = text.rstrip()
+    while stripped and stripped[-1] in PUNCTUATION_CLOSING_CHARS:
+        stripped = stripped[:-1]
+    return stripped.endswith("。")
 
 
 def _iter_punctuation_segments(text: str) -> list[str]:
@@ -890,10 +931,14 @@ class IrodoriMLXRuntimeManager:
     def _split_request_text(
         self, request: SpeechGenerationRequest, options: dict[str, Any]
     ) -> list[str]:
-        chunking = _bool_option(options, "chunking", default=True)
+        chunking = _bool_option(
+            options,
+            "chunking_enabled",
+            default=_bool_option(options, "chunking", default=True),
+        )
         if not chunking:
             return [request.input]
-        chunk_mode = _string_option(options, "chunk_mode", default="max_chars")
+        chunk_mode = _chunk_mode_option(options)
         chunk_max_chars = _int_option(
             options, "chunk_max_chars", default=self.config.text_max_length, minimum=1
         )

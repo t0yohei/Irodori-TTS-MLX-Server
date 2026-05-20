@@ -152,9 +152,10 @@ TOP_LEVEL_IRODORI_ALIASES = {
     "max_ref_seconds": "max_reference_seconds",
     "max_reference_seconds": "max_reference_seconds",
     "no_context_kv_cache": "no_context_kv_cache",
-    "chunking": "chunking",
-    "chunking_enabled": "chunking",
+    "chunking": "chunking_enabled",
+    "chunking_enabled": "chunking_enabled",
     "chunk_mode": "chunk_mode",
+    "punctuation_chunking_enabled": "punctuation_chunking_enabled",
     "chunk_max_chars": "chunk_max_chars",
     "chunk_min_chars": "chunk_min_chars",
     "chunk_target_chars": "chunk_target_chars",
@@ -165,7 +166,7 @@ IRODORI_OPTION_ALIASES = {
     "ref_wav": "reference_wav",
     "no_ref": "no_reference",
     "max_ref_seconds": "max_reference_seconds",
-    "chunking_enabled": "chunking",
+    "chunking": "chunking_enabled",
 }
 
 UNSUPPORTED_IRODORI_OPTIONS = {
@@ -204,7 +205,12 @@ def _set_irodori_option(options: dict[str, Any], canonical: str, value: Any, *, 
 def _irodori_option_values_match(canonical: str, current: Any, incoming: Any) -> bool:
     if current == incoming:
         return True
-    if canonical in {"no_reference", "no_context_kv_cache", "chunking"}:
+    if canonical in {
+        "no_reference",
+        "no_context_kv_cache",
+        "chunking_enabled",
+        "punctuation_chunking_enabled",
+    }:
         current_bool = _bool_like_option(current)
         incoming_bool = _bool_like_option(incoming)
         if current_bool is not None and incoming_bool is not None:
@@ -627,34 +633,6 @@ def _speech_generation_request(
     )
 
 
-def _chunk_max_chars(options: dict[str, Any], *, default: int) -> int:
-    raw = options.get("chunk_max_chars", default)
-    if isinstance(raw, bool):
-        raise openai_error(
-            "irodori.chunk_max_chars must be an integer.",
-            status_code=400,
-            param="irodori.chunk_max_chars",
-            code="invalid_irodori_options",
-        )
-    try:
-        value = int(raw)
-    except (TypeError, ValueError) as exc:
-        raise openai_error(
-            "irodori.chunk_max_chars must be an integer.",
-            status_code=400,
-            param="irodori.chunk_max_chars",
-            code="invalid_irodori_options",
-        ) from exc
-    if value < 1:
-        raise openai_error(
-            "irodori.chunk_max_chars must be >= 1.",
-            status_code=400,
-            param="irodori.chunk_max_chars",
-            code="invalid_irodori_options",
-        )
-    return value
-
-
 def _chunk_int_option(options: dict[str, Any], key: str, *, default: int, minimum: int) -> int:
     raw = options.get(key, default)
     param = f"irodori.{key}"
@@ -684,7 +662,11 @@ def _chunk_int_option(options: dict[str, Any], key: str, *, default: int, minimu
     return value
 
 
-def _chunk_mode(options: dict[str, Any]) -> str:
+def _chunk_max_chars(options: dict[str, Any], *, default: int) -> int:
+    return _chunk_int_option(options, "chunk_max_chars", default=default, minimum=1)
+
+
+def _legacy_chunk_mode(options: dict[str, Any]) -> str:
     raw = options.get("chunk_mode", "max_chars")
     if not isinstance(raw, str):
         raise openai_error(
@@ -703,18 +685,42 @@ def _chunk_mode(options: dict[str, Any]) -> str:
     return raw
 
 
+def _chunk_mode(options: dict[str, Any]) -> str:
+    legacy_mode = _legacy_chunk_mode(options)
+    raw = options.get("punctuation_chunking_enabled")
+    if raw is None:
+        return "punctuation" if legacy_mode == "punctuation" else "max_chars"
+    enabled = _bool_like_option(raw)
+    if enabled is None:
+        raise openai_error(
+            "irodori.punctuation_chunking_enabled must be a boolean.",
+            status_code=400,
+            param="irodori.punctuation_chunking_enabled",
+            code="invalid_irodori_options",
+        )
+    expected_mode = "punctuation" if enabled else "max_chars"
+    if "chunk_mode" in options and legacy_mode != expected_mode:
+        raise openai_error(
+            "irodori.punctuation_chunking_enabled conflicts with irodori.chunk_mode.",
+            status_code=400,
+            param="irodori.punctuation_chunking_enabled",
+            code="invalid_irodori_options",
+        )
+    return expected_mode
+
+
 def _speech_text_chunks(
     request: AudioSpeechRequest,
     options: dict[str, Any],
     *,
     default_max_chars: int,
 ) -> list[str]:
-    chunking = _bool_like_option(options.get("chunking", True))
+    chunking = _bool_like_option(options.get("chunking_enabled", True))
     if chunking is None:
         raise openai_error(
-            "irodori.chunking must be a boolean.",
+            "irodori.chunking_enabled must be a boolean.",
             status_code=400,
-            param="irodori.chunking",
+            param="irodori.chunking_enabled",
             code="invalid_irodori_options",
         )
     if chunking is False:
@@ -752,7 +758,7 @@ def _speech_text_chunks(
         raise openai_error(
             str(exc),
             status_code=400,
-            param="irodori.chunk_max_chars",
+            param="irodori",
             code="invalid_irodori_options",
         ) from exc
 
@@ -810,7 +816,7 @@ def _stream_chunk_generation_requests(
     requests: list[SpeechGenerationRequest] = []
     for index, chunk in enumerate(chunks):
         chunk_options = dict(options)
-        chunk_options["chunking"] = False
+        chunk_options["chunking_enabled"] = False
         if "seconds" in chunk_options or chunk_seconds[index] is not None:
             chunk_options["seconds"] = chunk_seconds[index]
         requests.append(

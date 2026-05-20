@@ -242,13 +242,11 @@ Supported `irodori` runtime options include `reference_wav`, `no_reference`,
 `caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,
 `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`,
 `cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, `no_context_kv_cache`,
-`chunking`, `chunk_mode`, `chunk_max_chars`, `chunk_min_chars`,
-`chunk_target_chars`, `chunk_hard_max_chars`, `tail_trim_ms`,
-`tail_silence_trim_ms`, `tail_silence_keep_ms`, and
-`tail_silence_threshold`.
+`chunking_enabled`, `punctuation_chunking_enabled`, `chunk_min_chars`, `tail_trim_ms`,
+`tail_silence_trim_ms`, `tail_silence_keep_ms`, and `tail_silence_threshold`.
 The upstream `irodori` aliases `ref_wav`, `no_ref`, `max_ref_seconds`,
-`context_kv_cache`, and `chunking_enabled` are also accepted when they map
-cleanly to the MLX runtime. Unsupported or ambiguous upstream options such as
+and `context_kv_cache` are also accepted when they map cleanly to the MLX
+runtime. Unsupported or ambiguous upstream options such as
 `lora_adapter`, `ref_latent`, and PyTorch schedule-specific controls are
 rejected instead of being silently ignored.
 When `duration_scale` is omitted, OpenAI `speed` maps to
@@ -261,18 +259,20 @@ requests cannot load arbitrary local adapter files. LoRA support should be added
 only after the MLX runtime exposes an adapter field plus clear alias/allowlist
 and cache/reload semantics.
 
-Long text chunking is enabled by default. The server splits text on Japanese and
-English punctuation before falling back to hard character slices, using
-`IRODORI_MLX_TEXT_MAX_LENGTH` as the default `chunk_max_chars`. Set
-`irodori.chunking=false` to send the full text to the runtime unchanged, or set
-`irodori.chunk_max_chars` to tune the split point. When `irodori.seconds` is
+Long text chunking is enabled by default. The server splits text on punctuation
+before falling back to hard character slices, using
+`IRODORI_MLX_TEXT_MAX_LENGTH` as the hard fallback size. Set
+`irodori.chunking_enabled=false` to send the full text to the runtime unchanged.
+When `irodori.seconds` is
 omitted, each chunk also omits `seconds` so Irodori-TTS-MLX can use its duration
 fallback or predicted-duration behavior. When `irodori.seconds` is explicit, the
 server distributes that total duration across chunks by character count.
-Set `irodori.chunk_mode="punctuation"` to use punctuation-oriented automatic
-chunk planning without manually tuning `chunk_max_chars`. In that mode,
-`chunk_min_chars`, `chunk_target_chars`, and `chunk_hard_max_chars` control
-short-segment merging, the preferred chunk size, and the hard fallback split.
+Set `irodori.punctuation_chunking_enabled=true` to use punctuation-oriented
+automatic chunk planning. In that mode, Japanese full stops (`。`) are forced
+boundaries, and `chunk_min_chars` controls short-segment merging.
+Older `chunking`, `chunk_mode`, and per-request chunk-size controls are
+accepted only as backward-compatible aliases; new clients should use the three
+controls above.
 
 For lower perceived latency, `POST /v1/audio/speech/stream-chunks` exposes an
 Irodori-specific Server-Sent Events extension. It reuses the same speech request
@@ -284,7 +284,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"First sentence. Second sentence.","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"clear studio narration","chunking":true,"chunk_max_chars":80}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"clear studio narration","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
 ```
 
 ```text
@@ -372,7 +372,7 @@ python -m irodori_tts_mlx_server --host 127.0.0.1 --port 8000
 
 curl http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"irodori-tts-mlx","input":"こんにちは。これは実行時スモークテストです。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"落ち着いた明瞭なナレーション","preset":"fast","chunking":false}}' \
+  -d '{"model":"irodori-tts-mlx","input":"こんにちは。これは実行時スモークテストです。","voice":"voicedesign","response_format":"wav","irodori":{"no_reference":true,"caption":"落ち着いた明瞭なナレーション","preset":"fast","chunking_enabled":false}}' \
   --output /tmp/irodori-real-mlx-smoke.wav
 
 python - <<'PY'

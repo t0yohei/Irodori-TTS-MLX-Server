@@ -59,7 +59,7 @@ def test_real_mlx_voicedesign_speech_endpoint_returns_non_empty_wav() -> None:
                     "IRODORI_REAL_MLX_SMOKE_CAPTION", "落ち着いた明瞭なナレーション"
                 ),
                 "preset": os.getenv("IRODORI_REAL_MLX_SMOKE_PRESET", "fast"),
-                "chunking": False,
+                "chunking_enabled": False,
             },
         },
     )
