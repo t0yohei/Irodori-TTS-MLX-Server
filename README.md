@@ -242,7 +242,8 @@ Supported `irodori` runtime options include `reference_wav`, `no_reference`,
 `caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,
 `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`,
 `cfg_min_t`, `cfg_max_t`, `max_reference_seconds`, `no_context_kv_cache`,
-`chunking_enabled`, `punctuation_chunking_enabled`, `chunk_min_chars`, `tail_trim_ms`,
+`chunking_enabled`, `punctuation_chunking_enabled`,
+`first_sentence_comma_chunking_enabled`, `chunk_min_chars`, `tail_trim_ms`,
 `tail_silence_trim_ms`, `tail_silence_keep_ms`, and `tail_silence_threshold`.
 The upstream `irodori` aliases `ref_wav`, `no_ref`, `max_ref_seconds`,
 and `context_kv_cache` are also accepted when they map cleanly to the MLX
@@ -269,7 +270,11 @@ fallback or predicted-duration behavior. When `irodori.seconds` is explicit, the
 server distributes that total duration across chunks by character count.
 Set `irodori.punctuation_chunking_enabled=true` to use punctuation-oriented
 automatic chunk planning. In that mode, Japanese full stops (`。`) are forced
-boundaries, and `chunk_min_chars` controls short-segment merging.
+boundaries, and `chunk_min_chars` controls short-segment merging. Set
+`irodori.first_sentence_comma_chunking_enabled=true` with punctuation chunking
+to split only the first sentence on Japanese commas such as `、`; this can reduce
+time to the first `/stream-chunks` audio event while later sentences keep the
+normal punctuation planner.
 
 For lower perceived latency, `POST /v1/audio/speech/stream-chunks` exposes an
 Irodori-specific Server-Sent Events extension. It reuses the same speech request
