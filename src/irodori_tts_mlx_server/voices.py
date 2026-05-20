@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 VOICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 VOICE_FILE_SUFFIX = ".wav"
 VOICE_FILE_SUFFIXES = (".wav", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".aac", ".webm")
+SPEAKER_EMBED_SUFFIX = ".speaker.safetensors"
 LATENT_FILE_SUFFIXES = (".pt", ".pth")
 STALE_CREATE_LOCK_SECONDS = 300
 HARD_LINK_UNSUPPORTED_ERRNOS = {errno.EPERM, errno.EXDEV} | {
@@ -275,6 +276,33 @@ class VoiceRegistry:
             raise ValueError("irodori.ref_wav must refer to a managed voice file.")
         if not resolved.is_file():
             raise ValueError("irodori.ref_wav must refer to a managed voice file.")
+        return resolved
+
+    def validate_speaker_embedding_path(self, value: str) -> Path:
+        parsed = urlparse(value)
+        if parsed.scheme or parsed.netloc:
+            raise ValueError("irodori.ref_embed must not be a remote URL.")
+
+        root = self._existing_root()
+        if root is None:
+            root = self.root.resolve(strict=False)
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        if path.is_symlink():
+            raise ValueError("irodori.ref_embed must not be a symbolic link.")
+        resolved = path.resolve(strict=False)
+        if not resolved.is_relative_to(root):
+            raise ValueError(
+                "irodori.ref_embed must resolve inside the configured voices directory."
+            )
+        if not resolved.name.endswith(SPEAKER_EMBED_SUFFIX):
+            raise ValueError(f"irodori.ref_embed must use suffix {SPEAKER_EMBED_SUFFIX}.")
+        voice_id = resolved.name[: -len(SPEAKER_EMBED_SUFFIX)]
+        if resolved.parent != root or not self.is_managed_voice_id(voice_id):
+            raise ValueError("irodori.ref_embed must refer to a managed speaker embedding file.")
+        if not resolved.is_file():
+            raise ValueError("irodori.ref_embed must refer to a managed speaker embedding file.")
         return resolved
 
     def _path_for(self, voice_id: str, *, suffix: str) -> Path:

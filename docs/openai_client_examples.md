@@ -33,7 +33,9 @@ curl http://127.0.0.1:8000/v1/audio/speech \
     "irodori": {
       "no_ref": true,
       "caption": "calm narration, clear diction",
-      "preset": "balanced"
+      "preset": "balanced",
+      "t_schedule_mode": "sway",
+      "sway_coeff": -1.0
     }
   }' \
   --output speech.wav
@@ -103,6 +105,8 @@ speech = client.audio.speech.create(
             "no_ref": True,
             "caption": "calm narration, clear diction",
             "preset": "balanced",
+            "rescale_k": 0.7,
+            "rescale_sigma": 1.2,
         }
     },
 )
@@ -129,8 +133,10 @@ speech.write_to_file(Path("speech.flac"))
 ~~~
 
 The OpenAI Python client does not need server-specific transport code. Use
-`extra_body` for Irodori-specific options such as `no_ref`, `caption`,
-`preset`, `seed`, `num_steps`, or reference audio paths.
+`extra_body` for Irodori-specific options such as `no_ref`, `ref_embed`,
+`caption`, `preset`, `seed`, `num_steps`, schedule/quality knobs, or
+reference audio paths. `ref_embed` paths must point at managed
+`.speaker.safetensors` files under the server voices directory.
 
 ## Streaming
 

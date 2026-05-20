@@ -24,6 +24,7 @@ class FakeGenerationRequest:
     text: str
     output_wav: str
     ref_wav: str | None = None
+    ref_embed: str | None = None
     no_ref: bool = False
     caption: str | None = None
     seconds: float | None = None
@@ -37,6 +38,13 @@ class FakeGenerationRequest:
     cfg_guidance_mode: str = "independent"
     cfg_min_t: float = 0.5
     cfg_max_t: float = 1.0
+    t_schedule_mode: str = "linear"
+    sway_coeff: float = -1.0
+    rescale_k: float | None = None
+    rescale_sigma: float | None = None
+    speaker_kv_scale: float | None = None
+    speaker_kv_min_t: float | None = None
+    speaker_kv_max_layers: int | None = None
     seed: int = 0
     max_ref_seconds: float | None = 30.0
     context_kv_cache: bool = True
@@ -435,6 +443,133 @@ def test_mlx_runtime_manager_lets_explicit_num_steps_override_preset() -> None:
     )
 
     assert FakeMLXRuntime.instances[0].requests[0].num_steps == 32
+
+
+def test_mlx_runtime_manager_passes_upstream_quality_options() -> None:
+    FakeMLXRuntime.instances.clear()
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=fake_module_loader,
+    )
+
+    manager.generate_speech(
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="hello",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={
+                "ref_embed": "/voices/sample.speaker.safetensors",
+                "t_schedule_mode": "sway",
+                "sway_coeff": -0.75,
+                "rescale_k": 0.7,
+                "rescale_sigma": 1.2,
+                "speaker_kv_scale": 1.4,
+                "speaker_kv_min_t": 0.8,
+                "speaker_kv_max_layers": 3,
+            },
+        )
+    )
+
+    request = FakeMLXRuntime.instances[0].requests[0]
+    assert request.ref_embed == "/voices/sample.speaker.safetensors"
+    assert request.no_ref is False
+    assert request.t_schedule_mode == "sway"
+    assert request.sway_coeff == -0.75
+    assert request.rescale_k == 0.7
+    assert request.rescale_sigma == 1.2
+    assert request.speaker_kv_scale == 1.4
+    assert request.speaker_kv_min_t == 0.8
+    assert request.speaker_kv_max_layers == 3
+
+
+def test_mlx_runtime_manager_rejects_conflicting_ref_embed_options() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=fake_module_loader,
+    )
+
+    with pytest.raises(RuntimeRequestError, match="Choose only one"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="voicedesign",
+                response_format="wav",
+                speed=1.0,
+                irodori={"ref_embed": "/voices/sample.speaker.safetensors", "no_ref": True},
+            )
+        )
+
+
+def test_mlx_runtime_manager_rejects_ref_embed_when_runtime_lacks_field() -> None:
+    @dataclass(frozen=True)
+    class LegacySamplingRequest:
+        text: str
+        output_wav: str
+        ref_wav: str | None = None
+        no_ref: bool = False
+
+    def module_loader():
+        runtime_module, resolver, codec_resolver = fake_module_loader()
+        runtime_module.SamplingRequest = LegacySamplingRequest
+        return runtime_module, resolver, codec_resolver
+
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=module_loader,
+    )
+
+    with pytest.raises(RuntimeUnavailableError, match="SamplingRequest exposes ref_embed"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="voicedesign",
+                response_format="wav",
+                speed=1.0,
+                irodori={"ref_embed": "/voices/sample.speaker.safetensors"},
+            )
+        )
+
+
+def test_mlx_runtime_manager_requires_rescale_pair() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=fake_module_loader,
+    )
+
+    with pytest.raises(RuntimeRequestError, match="rescale_k and irodori.rescale_sigma"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="voicedesign",
+                response_format="wav",
+                speed=1.0,
+                irodori={"no_ref": True, "rescale_k": 0.7},
+            )
+        )
+
+
+def test_mlx_runtime_manager_rejects_invalid_t_schedule_mode() -> None:
+    manager = IrodoriMLXRuntimeManager(
+        hosted_config(),
+        module_loader=fake_module_loader,
+    )
+
+    with pytest.raises(RuntimeRequestError, match="t_schedule_mode must be one of"):
+        manager.generate_speech(
+            SpeechGenerationRequest(
+                model="irodori-tts-mlx",
+                input="hello",
+                voice="voicedesign",
+                response_format="wav",
+                speed=1.0,
+                irodori={"no_ref": True, "t_schedule_mode": "cosine"},
+            )
+        )
 
 
 def test_mlx_runtime_manager_ignores_empty_lora_adapter_option() -> None:

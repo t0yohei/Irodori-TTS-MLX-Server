@@ -466,6 +466,16 @@ def _required_float_option(
     return value
 
 
+def _choice_option(
+    options: dict[str, Any], key: str, *, default: str, choices: set[str]
+) -> str:
+    value = _string_option(options, key, default=default) or default
+    if value not in choices:
+        joined = "', '".join(sorted(choices))
+        raise RuntimeRequestError(f"irodori.{key} must be one of '{joined}'.")
+    return value
+
+
 def _reject_unsupported_lora_adapter(options: dict[str, Any]) -> None:
     adapter = _clean_option(options, LORA_ADAPTER_OPTION)
     if adapter is None:
@@ -528,6 +538,22 @@ def _runtime_generation_request_kwargs(runtime_module: Any, **kwargs: Any) -> di
     request_class = _runtime_sampling_request_class(runtime_module)
     signature = inspect.signature(request_class)
     return {key: value for key, value in kwargs.items() if key in signature.parameters}
+
+
+def _ensure_sampling_request_fields(
+    runtime_module: Any, *, requested_fields: dict[str, str]
+) -> None:
+    request_class = _runtime_sampling_request_class(runtime_module)
+    parameters = inspect.signature(request_class).parameters
+    missing = [field for field in requested_fields if field not in parameters]
+    if not missing:
+        return
+    options = ", ".join(f"irodori.{requested_fields[field]}" for field in missing)
+    fields = ", ".join(missing)
+    raise RuntimeUnavailableError(
+        "Installed Irodori-TTS-MLX runtime is too old for requested option(s) "
+        f"{options}. Upgrade Irodori-TTS-MLX so SamplingRequest exposes {fields}."
+    )
 
 
 def _managed_reference_cache_info(options: dict[str, Any]) -> ManagedReferenceCacheInfo | None:
@@ -1002,6 +1028,8 @@ class IrodoriMLXRuntimeManager:
                 generation_request = self._build_generation_request(request, output_path)
             except ValueError as exc:
                 raise RuntimeRequestError(str(exc)) from exc
+            except RuntimeUnavailableError:
+                raise
             cache_info = _managed_reference_cache_info(request.irodori)
             cache_context = (
                 self._managed_reference_bridge.reference_cache(cache_info)
@@ -1012,6 +1040,8 @@ class IrodoriMLXRuntimeManager:
                 runtime.generate(generation_request)
             return output_path.read_bytes()
         except RuntimeRequestError:
+            raise
+        except RuntimeUnavailableError:
             raise
         except (OSError, RuntimeError, ValueError) as exc:
             raise RuntimeUnavailableError(f"Irodori-TTS-MLX generation failed: {exc}") from exc
@@ -1178,13 +1208,24 @@ class IrodoriMLXRuntimeManager:
             )
         _reject_unsupported_lora_adapter(options)
         ref_wav = _string_option(options, "ref_wav")
-        no_ref = _bool_option(options, "no_ref", default=ref_wav is None)
-        if ref_wav and no_ref:
-            raise RuntimeRequestError(
-                "irodori.ref_wav and irodori.no_ref=true cannot both be set."
+        ref_embed = _string_option(options, "ref_embed")
+        no_ref = _bool_option(options, "no_ref", default=ref_wav is None and ref_embed is None)
+        selected_reference_inputs = [
+            name
+            for name, value in (
+                ("ref_wav", ref_wav),
+                ("ref_embed", ref_embed),
+                ("no_ref", no_ref),
             )
-        if not ref_wav and not no_ref:
-            raise RuntimeRequestError("irodori.no_ref=false requires irodori.ref_wav.")
+            if bool(value)
+        ]
+        if len(selected_reference_inputs) > 1:
+            raise RuntimeRequestError(
+                "irodori reference options cannot both be set. Choose only one of "
+                "irodori.ref_wav, irodori.ref_embed, or irodori.no_ref=true."
+            )
+        if not selected_reference_inputs:
+            raise RuntimeRequestError("irodori.no_ref=false requires irodori.ref_wav or irodori.ref_embed.")
         duration_scale_explicit = "duration_scale" in options
         duration_scale = _float_option(options, "duration_scale", default=None)
         if duration_scale is None:
@@ -1193,6 +1234,44 @@ class IrodoriMLXRuntimeManager:
         cfg_max_t = _required_float_option(options, "cfg_max_t", default=1.0, positive=False)
         if cfg_min_t > cfg_max_t:
             raise RuntimeRequestError("irodori.cfg_min_t must be <= irodori.cfg_max_t.")
+        t_schedule_mode = _choice_option(
+            options, "t_schedule_mode", default="linear", choices={"linear", "sway"}
+        )
+        rescale_k = _float_option(options, "rescale_k", default=None)
+        rescale_sigma = _float_option(options, "rescale_sigma", default=None)
+        if (rescale_k is None) != (rescale_sigma is None):
+            raise RuntimeRequestError("irodori.rescale_k and irodori.rescale_sigma must be set together.")
+        speaker_kv_scale = _float_option(options, "speaker_kv_scale", default=None)
+        speaker_kv_min_t = None
+        if speaker_kv_scale is not None:
+            speaker_kv_min_t = _float_option(
+                options, "speaker_kv_min_t", default=0.9, positive=False
+            )
+            assert speaker_kv_min_t is not None
+            if not 0.0 <= speaker_kv_min_t <= 1.0:
+                raise RuntimeRequestError("irodori.speaker_kv_min_t must be in [0, 1].")
+        elif "speaker_kv_min_t" in options:
+            speaker_kv_min_t = _float_option(options, "speaker_kv_min_t", positive=False)
+        speaker_kv_max_layers = None
+        if "speaker_kv_max_layers" in options:
+            speaker_kv_max_layers = _int_option(
+                options, "speaker_kv_max_layers", default=0, minimum=0
+            )
+        requested_new_fields = {
+            field: option
+            for field, option in (
+                ("ref_embed", "ref_embed"),
+                ("t_schedule_mode", "t_schedule_mode"),
+                ("sway_coeff", "sway_coeff"),
+                ("rescale_k", "rescale_k"),
+                ("rescale_sigma", "rescale_sigma"),
+                ("speaker_kv_scale", "speaker_kv_scale"),
+                ("speaker_kv_min_t", "speaker_kv_min_t"),
+                ("speaker_kv_max_layers", "speaker_kv_max_layers"),
+            )
+            if option in options
+        }
+        _ensure_sampling_request_fields(runtime_module, requested_fields=requested_new_fields)
         seconds_explicit = "seconds" in options
         seconds = _float_option(options, "seconds", default=None)
         max_auto_seconds = None
@@ -1212,6 +1291,7 @@ class IrodoriMLXRuntimeManager:
                 text=request.input,
                 output_wav=str(output_path),
                 ref_wav=ref_wav,
+                ref_embed=ref_embed,
                 no_ref=no_ref,
                 caption=_string_option(options, "caption"),
                 seconds=seconds,
@@ -1228,6 +1308,15 @@ class IrodoriMLXRuntimeManager:
                 or "independent",
                 cfg_min_t=cfg_min_t,
                 cfg_max_t=cfg_max_t,
+                t_schedule_mode=t_schedule_mode,
+                sway_coeff=_required_float_option(
+                    options, "sway_coeff", default=-1.0, positive=False
+                ),
+                rescale_k=rescale_k,
+                rescale_sigma=rescale_sigma,
+                speaker_kv_scale=speaker_kv_scale,
+                speaker_kv_min_t=speaker_kv_min_t,
+                speaker_kv_max_layers=speaker_kv_max_layers,
                 seed=_int_option(options, "seed", default=0, minimum=0),
                 max_ref_seconds=_float_option(options, "max_ref_seconds", default=30.0),
                 context_kv_cache=_bool_option(options, "context_kv_cache", default=True),

@@ -1473,6 +1473,13 @@ def test_audio_speech_accepts_upstream_style_top_level_option_aliases() -> None:
             "cfg_guidance_mode": "independent",
             "cfg_min_t": 0.2,
             "cfg_max_t": 0.8,
+            "t_schedule_mode": "sway",
+            "sway_coeff": -0.75,
+            "rescale_k": 0.7,
+            "rescale_sigma": 1.2,
+            "speaker_kv_scale": 1.4,
+            "speaker_kv_min_t": 0.8,
+            "speaker_kv_max_layers": 3,
             "max_ref_seconds": 12.0,
             "context_kv_cache": False,
             "chunking_enabled": False,
@@ -1492,6 +1499,13 @@ def test_audio_speech_accepts_upstream_style_top_level_option_aliases() -> None:
         "cfg_guidance_mode": "independent",
         "cfg_min_t": 0.2,
         "cfg_max_t": 0.8,
+        "t_schedule_mode": "sway",
+        "sway_coeff": -0.75,
+        "rescale_k": 0.7,
+        "rescale_sigma": 1.2,
+        "speaker_kv_scale": 1.4,
+        "speaker_kv_min_t": 0.8,
+        "speaker_kv_max_layers": 3,
         "max_ref_seconds": 12.0,
         "context_kv_cache": False,
         "chunking_enabled": False,
@@ -1529,6 +1543,86 @@ def test_audio_speech_accepts_upstream_style_irodori_option_aliases(tmp_path) ->
         path=str(tmp_path / "reference.wav"),
         voice_id="reference",
     )
+
+
+def test_audio_speech_accepts_ref_embed_without_managed_voice_injection(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    (tmp_path / "sample.wav").write_bytes(b"wav")
+    ref_embed = tmp_path / "sample.speaker.safetensors"
+    ref_embed.write_bytes(b"speaker")
+    response = TestClient(
+        create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path))
+    ).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "sample",
+            "response_format": "wav",
+            "irodori": {
+                "ref_embed": "sample.speaker.safetensors",
+                "t_schedule_mode": "sway",
+                "sway_coeff": -0.75,
+                "rescale_k": 0.7,
+                "rescale_sigma": 1.2,
+                "speaker_kv_scale": 1.4,
+                "speaker_kv_min_t": 0.8,
+                "speaker_kv_max_layers": 3,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[0].irodori == {
+        "ref_embed": str(ref_embed),
+        "t_schedule_mode": "sway",
+        "sway_coeff": -0.75,
+        "rescale_k": 0.7,
+        "rescale_sigma": 1.2,
+        "speaker_kv_scale": 1.4,
+        "speaker_kv_min_t": 0.8,
+        "speaker_kv_max_layers": 3,
+    }
+
+
+def test_audio_speech_accepts_top_level_ref_embed_alias(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    ref_embed = tmp_path / "sample.speaker.safetensors"
+    ref_embed.write_bytes(b"speaker")
+    response = TestClient(
+        create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path))
+    ).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "ref_embed": "sample.speaker.safetensors",
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.requests[0].irodori == {
+        "ref_embed": str(ref_embed),
+    }
+
+
+def test_audio_speech_rejects_arbitrary_ref_embed_path() -> None:
+    response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {"ref_embed": "/tmp/sample.speaker.safetensors"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["param"] == "irodori.ref_embed"
+    assert "must resolve inside" in response.json()["error"]["message"]
 
 
 @pytest.mark.parametrize(

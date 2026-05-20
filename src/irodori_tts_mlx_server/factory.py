@@ -129,6 +129,7 @@ class AudioSpeechRequest(BaseModel):
 
 TOP_LEVEL_IRODORI_ALIASES = {
     "ref_wav": "ref_wav",
+    "ref_embed": "ref_embed",
     "no_ref": "no_ref",
     "seconds": "seconds",
     "duration_scale": "duration_scale",
@@ -140,6 +141,13 @@ TOP_LEVEL_IRODORI_ALIASES = {
     "cfg_guidance_mode": "cfg_guidance_mode",
     "cfg_min_t": "cfg_min_t",
     "cfg_max_t": "cfg_max_t",
+    "t_schedule_mode": "t_schedule_mode",
+    "sway_coeff": "sway_coeff",
+    "rescale_k": "rescale_k",
+    "rescale_sigma": "rescale_sigma",
+    "speaker_kv_scale": "speaker_kv_scale",
+    "speaker_kv_min_t": "speaker_kv_min_t",
+    "speaker_kv_max_layers": "speaker_kv_max_layers",
     "max_ref_seconds": "max_ref_seconds",
     "context_kv_cache": "context_kv_cache",
     "chunking_enabled": "chunking_enabled",
@@ -159,17 +167,10 @@ UNSUPPORTED_IRODORI_OPTIONS = {
     "ref_normalize_db",
     "ref_ensure_max",
     "max_caption_len",
-    "t_schedule_mode",
-    "sway_coeff",
     "num_candidates",
     "decode_mode",
     "cfg_scale",
     "truncation_factor",
-    "rescale_k",
-    "rescale_sigma",
-    "speaker_kv_scale",
-    "speaker_kv_min_t",
-    "speaker_kv_max_layers",
     "trim_tail",
     "tail_window_size",
     "tail_std_threshold",
@@ -436,6 +437,28 @@ def _apply_managed_voice_reference(
 ) -> dict[str, Any]:
     irodori_options = dict(request.irodori)
     irodori_options.pop(MANAGED_REFERENCE_CACHE_OPTION, None)
+    if "ref_embed" in irodori_options:
+        ref_embed = irodori_options["ref_embed"]
+        if not isinstance(ref_embed, str) or not ref_embed.strip():
+            raise openai_error(
+                "irodori.ref_embed must be a non-empty string.",
+                status_code=400,
+                param="irodori.ref_embed",
+                code="invalid_irodori_options",
+            )
+        try:
+            resolved_embed = voice_registry.validate_speaker_embedding_path(ref_embed)
+            irodori_options["ref_embed"] = str(resolved_embed)
+        except ValueError as exc:
+            raise openai_error(
+                str(exc),
+                status_code=400,
+                param="irodori.ref_embed",
+                code="invalid_irodori_options",
+            ) from exc
+        except OSError as exc:
+            raise _voice_storage_error(exc)
+        return irodori_options
     if "ref_wav" in irodori_options:
         ref_wav = irodori_options["ref_wav"]
         if not isinstance(ref_wav, str) or not ref_wav.strip():

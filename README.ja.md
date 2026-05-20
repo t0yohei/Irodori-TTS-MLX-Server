@@ -119,11 +119,16 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 synthesis streaming を行いません。`stream=true`, `stream_format`,
 `Accept: text/event-stream` を送ると `unsupported_streaming` エラーを返します。
 
-よく使う `irodori` option は `no_ref`, `caption`, `preset`, `seconds`,
-`duration_scale`, `num_steps`, `seed`, `chunking_enabled`,
+よく使う `irodori` option は `no_ref`, `ref_embed`, `caption`, `preset`,
+`seconds`, `duration_scale`, `num_steps`, `seed`, `t_schedule_mode`,
+`sway_coeff`, `rescale_k`, `rescale_sigma`, `speaker_kv_scale`,
+`speaker_kv_min_t`, `speaker_kv_max_layers`, `chunking_enabled`,
 `punctuation_chunking_enabled`, `first_sentence_comma_chunking_enabled`,
 `chunk_min_chars`, `tail_trim_ms`, `tail_silence_trim_ms` です。OpenAI の `speed` は
 `duration_scale` 未指定時に `duration_scale=1/speed` として扱います。
+`irodori.ref_embed` は `IRODORI_SERVER_VOICES_DIR` 配下にある既存の
+`.speaker.safetensors` managed file だけを受け付けます。remote URL、path
+traversal、symlink、任意の local path は拒否します。
 `preset` は `ultra-fast`, `fast`, `balanced`, `quality` を受け付け、それぞれ
 8, 12, 24, 40 sampling steps に対応します。`ultra-fast` は、`seconds` と
 `duration_scale` が未指定かつ `speed=1.0` の場合、対応する Irodori-TTS-MLX

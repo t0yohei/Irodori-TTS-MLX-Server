@@ -26,7 +26,7 @@ Status values:
 | Streaming response / SSE | Rejects `stream_format: "sse"` because generation is non-streaming. | Rejects `stream=true`, any `stream_format`, and SSE `Accept` requests on `/v1/audio/speech` with `unsupported_streaming`; supports chunk-level SSE on `/v1/audio/speech/stream-chunks`. | Partial | Client SDK helpers named `with_streaming_response` can still download the complete response. The chunk SSE route is not part of the OpenAI-compatible speech contract. |
 | Reference voice support | Resolves voices from files, `voices.json`, HTTP uploads, or a voice object. | Managed audio files uploaded under `/v1/audio/voices` can be selected by `voice` id or `{"id":"voice_id"}`; explicit `irodori.ref_wav` must resolve to an existing managed file under `IRODORI_SERVER_VOICES_DIR`. | Partial | The MLX server accepts common managed audio extensions but intentionally rejects alias files, latent references, remote URLs, path traversal, and arbitrary local paths. |
 | VoiceDesign caption / no-reference support | Supports upstream no-reference behavior through the PyTorch runtime and voice registry conventions. | Supports VoiceDesign v2 no-reference caption generation with `irodori.no_ref=true` and `irodori.caption`. Hosted converted VoiceDesign weights are documented in `docs/real_model_setup.md`. | Partial | This is the primary MLX path, but real smoke validation remains opt-in and depends on converted weights plus the external Irodori-TTS-MLX runtime package. |
-| Irodori runtime options | Supports common v3 sampling controls such as `num_steps`, `cfg_scale_text`, `cfg_scale_speaker`, `seed`, schedule controls, and per-request `lora_adapter`. | Supports `preset` (`ultra-fast`, `fast`, `balanced`, `quality`), `seconds`, `duration_scale`, `num_steps`, `seed`, `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`, `cfg_min_t`, `cfg_max_t`, `max_ref_seconds`, `context_kv_cache`, and `chunking_enabled`. Legacy option names are rejected. `irodori.lora_adapter` is parsed but rejected. | Partial | Dynamic LoRA, latent references, and PyTorch schedule-specific fields are explicitly rejected rather than silently ignored. |
+| Irodori runtime options | Supports common v3 sampling controls such as `num_steps`, `cfg_scale_text`, `cfg_scale_speaker`, `seed`, schedule controls, and per-request `lora_adapter`. | Supports `preset` (`ultra-fast`, `fast`, `balanced`, `quality`), `seconds`, `duration_scale`, `num_steps`, `seed`, `cfg_scale_text`, `cfg_scale_caption`, `cfg_scale_speaker`, `cfg_guidance_mode`, `cfg_min_t`, `cfg_max_t`, `t_schedule_mode`, `sway_coeff`, `rescale_k`, `rescale_sigma`, `speaker_kv_scale`, `speaker_kv_min_t`, `speaker_kv_max_layers`, `ref_embed`, `max_ref_seconds`, `context_kv_cache`, and `chunking_enabled`. Legacy option names are rejected. `irodori.lora_adapter` is parsed but rejected. | Partial | Dynamic LoRA, latent references, and unsupported PyTorch-only controls are explicitly rejected rather than silently ignored. |
 | Long-text chunking | Automatically chunks long text, with request/default controls such as `chunking_enabled` and `chunk_min_chars`; skips chunking when explicit seconds are set. | Chunks by punctuation and hard character slices by default. The public request controls are `irodori.chunking_enabled`, `irodori.punctuation_chunking_enabled`, and `irodori.chunk_min_chars`; in punctuation mode, Japanese full stops (`。`) are forced boundaries. Explicit `irodori.seconds` is distributed across chunks by character count. | Partial | Use the public request controls for chunking behavior. |
 | Queue / concurrency controls | Serializes expensive synthesis work with queue timeout controls. | Uses a synthesis semaphore controlled by `IRODORI_SERVER_MAX_CONCURRENT_SYNTHESIS` and `IRODORI_SERVER_QUEUE_TIMEOUT_SECONDS`; queue exhaustion returns `synthesis_queue_timeout`. | Implemented | Defaults are local-machine oriented: one synthesis at a time and a 30-second queue timeout. |
 | Bearer-token auth | Optional bearer-token auth on OpenAI-compatible routes. | Optional bearer-token auth on `/v1/*` routes via `IRODORI_SERVER_BEARER_TOKEN`; `IRODORI_API_KEY` is accepted as an alias. `/health` stays unauthenticated. | Implemented | This matches the intended local/OpenAI-compatible auth shape. |
@@ -62,10 +62,12 @@ Storage and security assumptions:
   not expose partial managed voice files.
 - A speech request using a managed `voice` id only injects the managed file path
   when the request did not already provide explicit `irodori.ref_wav` or
-  a no-reference option other than false. Upstream-style `no_ref=false` keeps
-  managed voice resolution enabled.
+  `irodori.ref_embed`, or a no-reference option other than false.
+  Upstream-style `no_ref=false` keeps managed voice resolution enabled.
 - Direct `irodori.ref_wav` is no longer an arbitrary local-server path:
   it must be a managed, non-symlink file under `IRODORI_SERVER_VOICES_DIR`.
+- Direct `irodori.ref_embed` is likewise constrained to an existing managed
+  `.speaker.safetensors` file under `IRODORI_SERVER_VOICES_DIR`.
 
 Audit classification:
 
@@ -75,7 +77,8 @@ Audit classification:
   receives the managed audio path and remains the decode boundary; adding a
   server-side transcoder would introduce new optional audio tooling.
 - Out of scope for this Apple Silicon MLX server: arbitrary local path aliases,
-  remote URL references, symlinked managed files, and upstream latent
+  remote URL references, symlinked managed files, unmanaged speaker embeddings,
+  and upstream latent
   `.pt`/`.pth` references.
 
 ## Dynamic LoRA adapter status
