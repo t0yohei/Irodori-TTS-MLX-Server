@@ -140,18 +140,15 @@ reference audio paths. `ref_embed` paths must point at managed
 
 ## Streaming
 
-The OpenAI-compatible `/v1/audio/speech` route still returns one completed audio
-file. Do not send `stream=true` or `Accept: text/event-stream` for that route.
-Those requests return a 400 OpenAI-style error with
-`code="unsupported_streaming"`. SDK helpers that stream the HTTP download body
-are different from synthesis streaming; they still receive one completed audio
-file from the server.
+The OpenAI-compatible `/v1/audio/speech` route supports OpenAI-style streaming.
+Use `stream_format="sse"` or `Accept: text/event-stream` to receive
+Server-Sent Events from the same route. `stream_format="audio"` is not
+supported.
 
-For lower perceived latency, this server also provides an Irodori-specific SSE
-extension that emits each synthesized text chunk as soon as it is ready:
+SSE streaming emits one audio delta per synthesized text chunk:
 
 ~~~bash
-curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \\
+curl -N http://127.0.0.1:8000/v1/audio/speech \\
   -H 'Content-Type: application/json' \\
   -H 'Accept: text/event-stream' \\
   -H 'Authorization: Bearer <token>' \\
@@ -160,6 +157,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \\
     "input": "最初の文です。次の文です。",
     "voice": "voicedesign",
     "response_format": "wav",
+    "stream_format": "sse",
     "irodori": {
       "no_ref": true,
       "caption": "clear studio narration",
@@ -178,13 +176,14 @@ punctuation chunk planner.
 The response uses Server-Sent Events:
 
 ~~~text
-event: audio_chunk
-data: {"index":0,"text":"First sentence.","format":"wav","media_type":"audio/wav","audio_base64":"..."}
+event: speech.audio.delta
+data: {"type":"speech.audio.delta","audio":"..."}
 
-event: done
-data: {"chunks":1}
+event: speech.audio.done
+data: {"type":"speech.audio.done","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}
 ~~~
 
-`audio_base64` contains one complete audio file for that chunk. Clients can
-decode and enqueue each `audio_chunk` for playback while the server generates
-later chunks. This endpoint is not part of the OpenAI speech API contract.
+`audio` contains base64-encoded audio bytes for the completed text chunk.
+Clients can decode and enqueue each `speech.audio.delta` while the server generates
+later chunks. The local server does not perform OpenAI token accounting, so the
+terminal event includes a zero-valued `usage` object for schema compatibility.

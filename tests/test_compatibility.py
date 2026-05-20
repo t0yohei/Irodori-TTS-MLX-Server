@@ -119,7 +119,7 @@ def test_openai_python_client_downloads_non_streaming_speech(tmp_path: Path) -> 
     ]
 
 
-def test_openai_python_client_rejects_unsupported_synthesis_streaming() -> None:
+def test_openai_python_client_rejects_non_sse_streaming() -> None:
     runtime = CompatibilityRuntime()
     client = openai_client(runtime)
 
@@ -127,9 +127,9 @@ def test_openai_python_client_rejects_unsupported_synthesis_streaming() -> None:
         client.audio.speech.create(
             model="irodori-tts-mlx",
             voice="voicedesign",
-            input="Streaming synthesis is intentionally unsupported.",
+            input="Only SSE speech streaming is supported.",
             response_format="wav",
-            extra_body={"stream": True},
+            extra_body={"stream": True, "irodori": {"no_ref": True}},
         )
 
     assert exc_info.value.status_code == 400
@@ -201,8 +201,6 @@ def test_supported_upstream_style_request_fixture_is_forwarded_to_runtime() -> N
 @pytest.mark.parametrize(
     ("payload_patch", "status_code", "param", "code"),
     [
-        ({"stream_format": "sse"}, 400, "stream_format", "unsupported_streaming"),
-        ({"stream": True}, 400, "stream", "unsupported_streaming"),
         (
             {"irodori": {"no_ref": True, "num_steps": 0}},
             400,

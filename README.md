@@ -12,9 +12,7 @@ The current public surface includes:
 
 - `GET /health`
 - `GET /v1/models`
-- `POST /v1/audio/speech`
-- `POST /v1/audio/speech/stream-chunks` for Irodori-specific chunk-level
-  Server-Sent Events
+- `POST /v1/audio/speech` with non-streaming and Server-Sent Events modes
 - `GET`, `POST`, `GET by id`, `PUT`, and `DELETE` for
   `/v1/audio/voices`
 - OpenAI-style JSON errors for validation, auth, queue, encoder, and runtime
@@ -31,8 +29,7 @@ converted Irodori-TTS-MLX weights are configured.
   error codes.
 - [docs/openai_client_examples.md](docs/openai_client_examples.md): `curl` and
   Python OpenAI client examples, bearer auth, FFmpeg-backed response formats,
-  unsupported OpenAI speech streaming, and the Irodori-specific chunk-level SSE
-  extension.
+  and SSE speech streaming.
 - [docs/deployment.md](docs/deployment.md): production-ish local deployment on
   Apple Silicon, launchd templates, auth, queue controls, health checks, logs,
   and operational environment variables.
@@ -69,7 +66,7 @@ implemented surface supports the OpenAI-compatible model list and speech
 endpoint, VoiceDesign v2 no-reference/caption options, managed reference voice
 uploads, `wav` and raw `pcm` output, FFmpeg-backed `mp3`, `flac`, `opus`, and
 `aac` output, long-text chunking, chunk-level SSE through
-`/v1/audio/speech/stream-chunks`, queue controls, optional bearer auth, and
+`/v1/audio/speech`, queue controls, optional bearer auth, and
 clear configuration errors before weights are available. Full upstream option
 coverage is tracked as compatibility work unless explicitly documented as
 implemented here.
@@ -117,8 +114,7 @@ checkout setup walkthrough, converted-weights layout contract, local run
 commands, speech `curl` example, and common error codes.
 See [docs/openai_client_examples.md](docs/openai_client_examples.md) for
 OpenAI-compatible `curl` and Python client examples, including bearer auth,
-FFmpeg-backed response formats, unsupported OpenAI speech streaming, and the
-chunk-level SSE extension.
+FFmpeg-backed response formats and SSE speech streaming.
 See [docs/deployment.md](docs/deployment.md) for production-ish local deployment
 guidance covering Apple Silicon host assumptions, bearer auth, queue controls,
 health checks, logs, and the packaged launchd templates under
@@ -235,9 +231,9 @@ top-level runtime option aliases such as `no_ref`, `ref_embed`, `seconds`,
 `response_format=pcm`
 work without optional encoders. `mp3`, `flac`, `opus`, and `aac` use FFmpeg
 when it is installed; otherwise the server returns an OpenAI-style error with
-setup guidance. The OpenAI-compatible `/v1/audio/speech` route does not stream
-synthesis; `stream=true`, `stream_format`, or `Accept: text/event-stream`
-requests return an OpenAI-style `unsupported_streaming` error object.
+setup guidance. The OpenAI-compatible `/v1/audio/speech` route supports
+`stream_format="sse"` or `Accept: text/event-stream` for Server-Sent
+Events. `stream_format="audio"` is not supported.
 
 Supported `irodori` runtime options include `ref_wav`, `ref_embed`, `no_ref`,
 `caption`, `preset`, `seconds`, `duration_scale`, `num_steps`, `seed`,
@@ -277,34 +273,34 @@ automatic chunk planning. In that mode, Japanese full stops (`。`) are forced
 boundaries, and `chunk_min_chars` controls short-segment merging. Set
 `irodori.first_sentence_comma_chunking_enabled=true` with punctuation chunking
 to split only the first sentence on Japanese commas such as `、`; this can reduce
-time to the first `/stream-chunks` audio event while later sentences keep the
+time to the first SSE audio event while later sentences keep the
 normal punctuation planner.
 
-For lower perceived latency, `POST /v1/audio/speech/stream-chunks` exposes an
-Irodori-specific Server-Sent Events extension. It reuses the same speech request
-shape and chunking controls, then emits one `audio_chunk` event per synthesized
-text chunk and a final `done` event:
+For lower perceived latency, `POST /v1/audio/speech` supports OpenAI-style
+Server-Sent Events. It reuses the same speech request shape and chunking
+controls, then emits one `speech.audio.delta` event per synthesized text chunk
+and a final `speech.audio.done` event:
 
 ```bash
-curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \
+curl -N http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_ref":true,"caption":"clear studio narration","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"clear studio narration","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
 ```
 
 ```text
-event: audio_chunk
-data: {"index":0,"text":"First sentence.","format":"wav","media_type":"audio/wav","audio_base64":"..."}
+event: speech.audio.delta
+data: {"type":"speech.audio.delta","audio":"..."}
 
-event: done
-data: {"chunks":1}
+event: speech.audio.done
+data: {"type":"speech.audio.done","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}
 ```
 
-Each `audio_base64` value contains one complete audio file for that chunk, so
-clients can decode and enqueue chunks while later chunks are still generating.
-This endpoint is an additive server extension, not part of the OpenAI speech API
-contract.
+Each `audio` value contains base64-encoded audio for the completed text chunk,
+so clients can decode and enqueue chunks while later chunks are still
+generating. The local server does not perform OpenAI token accounting, so the
+terminal event includes a zero-valued `usage` object for schema compatibility.
 
 Tail artifact controls are optional and run before chunk concatenation.
 `tail_trim_ms` removes a fixed amount from the end of each generated chunk.
