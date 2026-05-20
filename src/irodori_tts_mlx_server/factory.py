@@ -24,9 +24,7 @@ from irodori_tts_mlx_server.audio import (
     ensure_response_format_available,
 )
 from irodori_tts_mlx_server.runtime import (
-    DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS,
     DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS,
-    DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS,
     MANAGED_REFERENCE_CACHE_OPTION,
     RuntimeRequestError,
     RuntimeUnavailableError,
@@ -152,21 +150,15 @@ TOP_LEVEL_IRODORI_ALIASES = {
     "max_ref_seconds": "max_reference_seconds",
     "max_reference_seconds": "max_reference_seconds",
     "no_context_kv_cache": "no_context_kv_cache",
-    "chunking": "chunking_enabled",
     "chunking_enabled": "chunking_enabled",
-    "chunk_mode": "chunk_mode",
     "punctuation_chunking_enabled": "punctuation_chunking_enabled",
-    "chunk_max_chars": "chunk_max_chars",
     "chunk_min_chars": "chunk_min_chars",
-    "chunk_target_chars": "chunk_target_chars",
-    "chunk_hard_max_chars": "chunk_hard_max_chars",
 }
 
 IRODORI_OPTION_ALIASES = {
     "ref_wav": "reference_wav",
     "no_ref": "no_reference",
     "max_ref_seconds": "max_reference_seconds",
-    "chunking": "chunking_enabled",
 }
 
 UNSUPPORTED_IRODORI_OPTIONS = {
@@ -191,6 +183,11 @@ UNSUPPORTED_IRODORI_OPTIONS = {
     "tail_std_threshold",
     "tail_mean_threshold",
     "max_text_len",
+    "chunking",
+    "chunk_mode",
+    "chunk_max_chars",
+    "chunk_target_chars",
+    "chunk_hard_max_chars",
 }
 
 
@@ -662,34 +659,10 @@ def _chunk_int_option(options: dict[str, Any], key: str, *, default: int, minimu
     return value
 
 
-def _chunk_max_chars(options: dict[str, Any], *, default: int) -> int:
-    return _chunk_int_option(options, "chunk_max_chars", default=default, minimum=1)
-
-
-def _legacy_chunk_mode(options: dict[str, Any]) -> str:
-    raw = options.get("chunk_mode", "max_chars")
-    if not isinstance(raw, str):
-        raise openai_error(
-            "irodori.chunk_mode must be a string.",
-            status_code=400,
-            param="irodori.chunk_mode",
-            code="invalid_irodori_options",
-        )
-    if raw not in {"max_chars", "punctuation"}:
-        raise openai_error(
-            "irodori.chunk_mode must be one of 'max_chars', 'punctuation'.",
-            status_code=400,
-            param="irodori.chunk_mode",
-            code="invalid_irodori_options",
-        )
-    return raw
-
-
 def _chunk_mode(options: dict[str, Any]) -> str:
-    legacy_mode = _legacy_chunk_mode(options)
     raw = options.get("punctuation_chunking_enabled")
     if raw is None:
-        return "punctuation" if legacy_mode == "punctuation" else "max_chars"
+        return "max_chars"
     enabled = _bool_like_option(raw)
     if enabled is None:
         raise openai_error(
@@ -698,15 +671,7 @@ def _chunk_mode(options: dict[str, Any]) -> str:
             param="irodori.punctuation_chunking_enabled",
             code="invalid_irodori_options",
         )
-    expected_mode = "punctuation" if enabled else "max_chars"
-    if "chunk_mode" in options and legacy_mode != expected_mode:
-        raise openai_error(
-            "irodori.punctuation_chunking_enabled conflicts with irodori.chunk_mode.",
-            status_code=400,
-            param="irodori.punctuation_chunking_enabled",
-            code="invalid_irodori_options",
-        )
-    return expected_mode
+    return "punctuation" if enabled else "max_chars"
 
 
 def _speech_text_chunks(
@@ -726,33 +691,18 @@ def _speech_text_chunks(
     if chunking is False:
         return [request.input]
     chunk_mode = _chunk_mode(options)
-    max_chars = _chunk_max_chars(options, default=default_max_chars)
     min_chars = _chunk_int_option(
         options,
         "chunk_min_chars",
         default=DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS,
         minimum=0,
     )
-    target_chars = _chunk_int_option(
-        options,
-        "chunk_target_chars",
-        default=DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS,
-        minimum=1,
-    )
-    hard_max_chars = _chunk_int_option(
-        options,
-        "chunk_hard_max_chars",
-        default=DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS,
-        minimum=1,
-    )
     try:
         return split_text_for_generation(
             request.input,
-            max_chars=max_chars,
+            max_chars=default_max_chars,
             chunk_mode=chunk_mode,
             chunk_min_chars=min_chars,
-            chunk_target_chars=target_chars,
-            chunk_hard_max_chars=hard_max_chars,
         )
     except RuntimeRequestError as exc:
         raise openai_error(

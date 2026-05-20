@@ -496,18 +496,7 @@ def _num_steps_option(options: dict[str, Any]) -> int:
 
 
 def _chunk_mode_option(options: dict[str, Any]) -> str:
-    legacy_mode = _string_option(options, "chunk_mode", default="max_chars")
-    if legacy_mode not in {"max_chars", "punctuation"}:
-        raise RuntimeRequestError("irodori.chunk_mode must be one of 'max_chars', 'punctuation'.")
-    if "punctuation_chunking_enabled" not in options:
-        return "punctuation" if legacy_mode == "punctuation" else "max_chars"
-    enabled = _bool_option(options, "punctuation_chunking_enabled")
-    expected_mode = "punctuation" if enabled else "max_chars"
-    if "chunk_mode" in options and legacy_mode != expected_mode:
-        raise RuntimeRequestError(
-            "irodori.punctuation_chunking_enabled conflicts with irodori.chunk_mode."
-        )
-    return expected_mode
+    return "punctuation" if _bool_option(options, "punctuation_chunking_enabled") else "max_chars"
 
 
 def _runtime_generation_request_kwargs(runtime_module: Any, **kwargs: Any) -> dict[str, Any]:
@@ -934,39 +923,22 @@ class IrodoriMLXRuntimeManager:
         chunking = _bool_option(
             options,
             "chunking_enabled",
-            default=_bool_option(options, "chunking", default=True),
+            default=True,
         )
         if not chunking:
             return [request.input]
         chunk_mode = _chunk_mode_option(options)
-        chunk_max_chars = _int_option(
-            options, "chunk_max_chars", default=self.config.text_max_length, minimum=1
-        )
         chunk_min_chars = _int_option(
             options,
             "chunk_min_chars",
             default=DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS,
             minimum=0,
         )
-        chunk_target_chars = _int_option(
-            options,
-            "chunk_target_chars",
-            default=DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS,
-            minimum=1,
-        )
-        chunk_hard_max_chars = _int_option(
-            options,
-            "chunk_hard_max_chars",
-            default=DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS,
-            minimum=1,
-        )
         return split_text_for_generation(
             request.input,
-            max_chars=chunk_max_chars,
+            max_chars=self.config.text_max_length,
             chunk_mode=chunk_mode,
             chunk_min_chars=chunk_min_chars,
-            chunk_target_chars=chunk_target_chars,
-            chunk_hard_max_chars=chunk_hard_max_chars,
         )
 
     def _chunk_seconds(self, options: dict[str, Any], chunks: list[str]) -> list[float | None]:

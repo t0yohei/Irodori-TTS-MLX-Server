@@ -1652,7 +1652,7 @@ def test_audio_speech_accepts_chunking_and_tail_artifact_controls() -> None:
     }
 
 
-def test_audio_speech_accepts_legacy_chunking_controls() -> None:
+def test_audio_speech_rejects_unsupported_chunking_controls() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech",
@@ -1669,9 +1669,11 @@ def test_audio_speech_accepts_legacy_chunking_controls() -> None:
         },
     )
 
-    assert response.status_code == 200
-    assert runtime.requests[0].irodori["chunking_enabled"] is True
-    assert runtime.requests[0].irodori["chunk_max_chars"] == 8
+    assert response.status_code == 422
+    detail = response.json()["error"]["message"]
+    assert "irodori.chunk_max_chars" in detail
+    assert "irodori.chunking" in detail
+    assert runtime.requests == []
 
 
 def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
@@ -1753,7 +1755,7 @@ def test_audio_speech_stream_chunks_supports_punctuation_chunking_enabled() -> N
     ]
 
 
-def test_audio_speech_stream_chunks_keeps_legacy_punctuation_chunk_mode() -> None:
+def test_audio_speech_stream_chunks_rejects_unsupported_punctuation_chunk_mode() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech/stream-chunks",
@@ -1771,14 +1773,14 @@ def test_audio_speech_stream_chunks_keeps_legacy_punctuation_chunk_mode() -> Non
         },
     )
 
-    assert response.status_code == 200
-    assert [request.input for request in runtime.requests] == [
-        "こんにちは。",
-        "互換性テストです。",
-    ]
+    assert response.status_code == 422
+    assert "Unsupported upstream Irodori option(s): irodori.chunk_mode." in str(
+        response.json()["error"]["message"]
+    )
+    assert runtime.requests == []
 
 
-def test_audio_speech_rejects_conflicting_punctuation_chunk_options() -> None:
+def test_audio_speech_rejects_unsupported_chunk_size_options() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech/stream-chunks",
@@ -1790,16 +1792,15 @@ def test_audio_speech_rejects_conflicting_punctuation_chunk_options() -> None:
             "irodori": {
                 "no_reference": True,
                 "chunking_enabled": True,
-                "punctuation_chunking_enabled": False,
-                "chunk_mode": "punctuation",
+                "punctuation_chunking_enabled": True,
+                "chunk_hard_max_chars": 3,
             },
         },
     )
 
-    assert response.status_code == 400
-    assert (
+    assert response.status_code == 422
+    assert "Unsupported upstream Irodori option(s): irodori.chunk_hard_max_chars." in str(
         response.json()["error"]["message"]
-        == "irodori.punctuation_chunking_enabled conflicts with irodori.chunk_mode."
     )
     assert runtime.requests == []
 
