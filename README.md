@@ -270,9 +270,6 @@ server distributes that total duration across chunks by character count.
 Set `irodori.punctuation_chunking_enabled=true` to use punctuation-oriented
 automatic chunk planning. In that mode, Japanese full stops (`。`) are forced
 boundaries, and `chunk_min_chars` controls short-segment merging.
-Older `chunking`, `chunk_mode`, and per-request chunk-size controls are
-accepted only as backward-compatible aliases; new clients should use the three
-controls above.
 
 For lower perceived latency, `POST /v1/audio/speech/stream-chunks` exposes an
 Irodori-specific Server-Sent Events extension. It reuses the same speech request
