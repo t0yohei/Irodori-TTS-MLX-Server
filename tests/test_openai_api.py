@@ -1755,6 +1755,70 @@ def test_audio_speech_stream_chunks_supports_punctuation_chunking_enabled() -> N
     ]
 
 
+def test_audio_speech_stream_chunks_supports_first_sentence_comma_chunking() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech/stream-chunks",
+        headers={"accept": "text/event-stream"},
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "最初は速く、すぐ返します。次は長くて、通常のままです。",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_reference": True,
+                "chunking_enabled": True,
+                "punctuation_chunking_enabled": True,
+                "first_sentence_comma_chunking_enabled": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert [request.input for request in runtime.requests] == [
+        "最初は速く、",
+        "すぐ返します。",
+        "次は長くて、通常のままです。",
+    ]
+    events = sse_events(response.text)
+    assert [event for event, _data in events] == [
+        "audio_chunk",
+        "audio_chunk",
+        "audio_chunk",
+        "done",
+    ]
+    assert [data["text"] for _event, data in events[:3]] == [
+        "最初は速く、",
+        "すぐ返します。",
+        "次は長くて、通常のままです。",
+    ]
+
+
+def test_audio_speech_stream_chunks_rejects_invalid_first_sentence_comma_chunking() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech/stream-chunks",
+        headers={"accept": "text/event-stream"},
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "こんにちは、テストです。",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_reference": True,
+                "punctuation_chunking_enabled": True,
+                "first_sentence_comma_chunking_enabled": "quick",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["param"] == "irodori.first_sentence_comma_chunking_enabled"
+    assert error["code"] == "invalid_irodori_options"
+    assert runtime.requests == []
+
+
 def test_audio_speech_stream_chunks_rejects_unsupported_punctuation_chunk_mode() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(

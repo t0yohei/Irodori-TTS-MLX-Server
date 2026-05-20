@@ -563,6 +563,31 @@ def test_split_text_for_generation_punctuation_mode_merges_short_segments() -> N
     ]
 
 
+def test_split_text_for_generation_first_sentence_comma_chunking() -> None:
+    assert split_text_for_generation(
+        "最初は速く、すぐ返します。次は長くて、通常のままです。",
+        max_chars=256,
+        chunk_mode="punctuation",
+        first_sentence_comma_chunking_enabled=True,
+    ) == [
+        "最初は速く、",
+        "すぐ返します。",
+        "次は長くて、通常のままです。",
+    ]
+
+
+def test_first_sentence_comma_chunking_leaves_text_without_comma_unchanged() -> None:
+    assert split_text_for_generation(
+        "最初の文です。次は長くて、通常のままです。",
+        max_chars=256,
+        chunk_mode="punctuation",
+        first_sentence_comma_chunking_enabled=True,
+    ) == [
+        "最初の文です。",
+        "次は長くて、通常のままです。",
+    ]
+
+
 def test_split_text_for_generation_punctuation_mode_hard_splits_unbroken_text() -> None:
     assert split_text_for_generation(
         "abcdefghijklmnopqrstuvwxyz",

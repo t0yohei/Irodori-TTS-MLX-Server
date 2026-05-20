@@ -37,6 +37,8 @@ MANAGED_REFERENCE_CACHE_OPTION = "_managed_reference_cache"
 DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS = 12
 DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS = 40
 DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS = 120
+FIRST_SENTENCE_COMMA_BREAK_CHARS = set("、，,;；:：")
+SENTENCE_TERMINAL_CHARS = set("。．.!！？?")
 PUNCTUATION_CLOSING_CHARS = set("」』）)]】〕〉》｝}＞>？”’”\"'!?！？")
 logger = logging.getLogger("irodori_tts_mlx_server.runtime")
 
@@ -533,6 +535,7 @@ def split_text_for_generation(
     chunk_min_chars: int = DEFAULT_PUNCTUATION_CHUNK_MIN_CHARS,
     chunk_target_chars: int = DEFAULT_PUNCTUATION_CHUNK_TARGET_CHARS,
     chunk_hard_max_chars: int = DEFAULT_PUNCTUATION_CHUNK_HARD_MAX_CHARS,
+    first_sentence_comma_chunking_enabled: bool = False,
 ) -> list[str]:
     """Split long text on natural boundaries before falling back to hard slices."""
 
@@ -552,6 +555,7 @@ def split_text_for_generation(
             min_chars=chunk_min_chars,
             target_chars=chunk_target_chars,
             hard_max_chars=min(chunk_hard_max_chars, max_chars),
+            split_first_sentence_on_commas=first_sentence_comma_chunking_enabled,
         )
     if len(text) <= max_chars:
         return [text]
@@ -578,7 +582,18 @@ def _split_text_by_punctuation_plan(
     min_chars: int,
     target_chars: int,
     hard_max_chars: int,
+    split_first_sentence_on_commas: bool = False,
 ) -> list[str]:
+    if split_first_sentence_on_commas:
+        fast_chunks = _split_first_sentence_on_commas(
+            text,
+            min_chars=min_chars,
+            target_chars=target_chars,
+            hard_max_chars=hard_max_chars,
+        )
+        if fast_chunks is not None:
+            return fast_chunks
+
     if "。" not in text and len(text) <= target_chars and len(text) <= hard_max_chars:
         return [text]
 
@@ -621,6 +636,71 @@ def _split_text_by_punctuation_plan(
     if current:
         chunks.extend(_split_overlong_segment(current, max_chars=hard_max_chars))
     return [chunk for chunk in chunks if chunk]
+
+
+def _split_first_sentence_on_commas(
+    text: str,
+    *,
+    min_chars: int,
+    target_chars: int,
+    hard_max_chars: int,
+) -> list[str] | None:
+    sentence_end = _first_sentence_end_index(text)
+    first_sentence = text[:sentence_end]
+    if not any(char in FIRST_SENTENCE_COMMA_BREAK_CHARS for char in first_sentence):
+        return None
+
+    chunks: list[str] = []
+    start = 0
+    for index, char in enumerate(first_sentence):
+        if char not in FIRST_SENTENCE_COMMA_BREAK_CHARS:
+            continue
+        segment = first_sentence[start : index + 1]
+        if segment:
+            chunks.extend(
+                _split_overlong_segment(
+                    _lstrip_chunk_segment(segment, chunks),
+                    max_chars=hard_max_chars,
+                )
+            )
+        start = index + 1
+
+    tail_segment = first_sentence[start:]
+    if tail_segment:
+        chunks.extend(
+            _split_overlong_segment(
+                _lstrip_chunk_segment(tail_segment, chunks),
+                max_chars=hard_max_chars,
+            )
+        )
+
+    remaining = _lstrip_non_whitespace(text[sentence_end:])
+    if remaining:
+        chunks.extend(
+            _split_text_by_punctuation_plan(
+                remaining,
+                min_chars=min_chars,
+                target_chars=target_chars,
+                hard_max_chars=hard_max_chars,
+                split_first_sentence_on_commas=False,
+            )
+        )
+    return [chunk for chunk in chunks if chunk]
+
+
+def _lstrip_chunk_segment(segment: str, chunks: Sequence[str]) -> str:
+    return _lstrip_non_whitespace(segment) if chunks else segment
+
+
+def _first_sentence_end_index(text: str) -> int:
+    for index, char in enumerate(text):
+        if char not in SENTENCE_TERMINAL_CHARS:
+            continue
+        end = index + 1
+        while end < len(text) and text[end] in PUNCTUATION_CLOSING_CHARS:
+            end += 1
+        return end
+    return len(text)
 
 
 def _lstrip_non_whitespace(text: str) -> str:
@@ -939,6 +1019,10 @@ class IrodoriMLXRuntimeManager:
             max_chars=self.config.text_max_length,
             chunk_mode=chunk_mode,
             chunk_min_chars=chunk_min_chars,
+            first_sentence_comma_chunking_enabled=_bool_option(
+                options,
+                "first_sentence_comma_chunking_enabled",
+            ),
         )
 
     def _chunk_seconds(self, options: dict[str, Any], chunks: list[str]) -> list[float | None]:

@@ -152,6 +152,7 @@ TOP_LEVEL_IRODORI_ALIASES = {
     "no_context_kv_cache": "no_context_kv_cache",
     "chunking_enabled": "chunking_enabled",
     "punctuation_chunking_enabled": "punctuation_chunking_enabled",
+    "first_sentence_comma_chunking_enabled": "first_sentence_comma_chunking_enabled",
     "chunk_min_chars": "chunk_min_chars",
 }
 
@@ -207,6 +208,7 @@ def _irodori_option_values_match(canonical: str, current: Any, incoming: Any) ->
         "no_context_kv_cache",
         "chunking_enabled",
         "punctuation_chunking_enabled",
+        "first_sentence_comma_chunking_enabled",
     }:
         current_bool = _bool_like_option(current)
         incoming_bool = _bool_like_option(incoming)
@@ -674,6 +676,20 @@ def _chunk_mode(options: dict[str, Any]) -> str:
     return "punctuation" if enabled else "max_chars"
 
 
+def _chunk_bool_option(options: dict[str, Any], key: str, *, default: bool = False) -> bool:
+    raw = options.get(key, default)
+    enabled = _bool_like_option(raw)
+    if enabled is None:
+        param = f"irodori.{key}"
+        raise openai_error(
+            f"{param} must be a boolean.",
+            status_code=400,
+            param=param,
+            code="invalid_irodori_options",
+        )
+    return enabled
+
+
 def _speech_text_chunks(
     request: AudioSpeechRequest,
     options: dict[str, Any],
@@ -691,6 +707,10 @@ def _speech_text_chunks(
     if chunking is False:
         return [request.input]
     chunk_mode = _chunk_mode(options)
+    first_sentence_comma_chunking_enabled = _chunk_bool_option(
+        options,
+        "first_sentence_comma_chunking_enabled",
+    )
     min_chars = _chunk_int_option(
         options,
         "chunk_min_chars",
@@ -703,6 +723,7 @@ def _speech_text_chunks(
             max_chars=default_max_chars,
             chunk_mode=chunk_mode,
             chunk_min_chars=min_chars,
+            first_sentence_comma_chunking_enabled=first_sentence_comma_chunking_enabled,
         )
     except RuntimeRequestError as exc:
         raise openai_error(
