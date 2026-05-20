@@ -1288,7 +1288,7 @@ def test_audio_speech_zero_queue_timeout_rejects_when_queue_is_full() -> None:
     assert first_status == {"status_code": 200}
 
 
-def test_audio_speech_stream_chunks_returns_queue_timeout_before_streaming() -> None:
+def test_audio_speech_sse_stream_returns_queue_timeout_event() -> None:
     runtime = BlockingSpeechRuntime()
     client = TestClient(
         create_app(
@@ -1301,13 +1301,14 @@ def test_audio_speech_stream_chunks_returns_queue_timeout_before_streaming() -> 
         "input": "hello. goodbye.",
         "voice": "voicedesign",
         "response_format": "wav",
+        "stream_format": "sse",
         "irodori": {"no_ref": True},
     }
     first_status: dict[str, int] = {}
 
     def first_request() -> None:
         first_status["status_code"] = client.post(
-            "/v1/audio/speech/stream-chunks",
+            "/v1/audio/speech",
             headers={"accept": "text/event-stream"},
             json=payload,
         ).status_code
@@ -1317,7 +1318,7 @@ def test_audio_speech_stream_chunks_returns_queue_timeout_before_streaming() -> 
     assert runtime.started.wait(timeout=2)
     try:
         response = client.post(
-            "/v1/audio/speech/stream-chunks",
+            "/v1/audio/speech",
             headers={"accept": "text/event-stream"},
             json=payload,
         )
@@ -1675,16 +1676,17 @@ def test_audio_speech_rejects_unsupported_chunking_controls() -> None:
     assert runtime.requests == []
 
 
-def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
+def test_audio_speech_sse_stream_emits_each_generated_chunk_as_audio_delta() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
-        "/v1/audio/speech/stream-chunks",
+        "/v1/audio/speech",
         headers={"accept": "text/event-stream"},
         json={
             "model": "irodori-tts-mlx",
             "input": "こんにちは。さようなら。",
             "voice": "voicedesign",
             "response_format": "wav",
+            "stream_format": "sse",
             "irodori": {
                 "no_ref": True,
                 "chunking_enabled": True,
@@ -1703,20 +1705,19 @@ def test_audio_speech_stream_chunks_emits_each_generated_chunk_as_sse() -> None:
         1.5,
     ]
     events = sse_events(response.text)
-    assert [event for event, _data in events] == ["audio_chunk", "audio_chunk", "done"]
+    assert [event for event, _data in events] == ["audio.delta", "audio.delta", "audio.done"]
     first_chunk = events[0][1]
     assert first_chunk["index"] == 0
-    assert first_chunk["text"] == "こんにちは。"
-    assert first_chunk["format"] == "wav"
+    assert first_chunk["response_format"] == "wav"
     assert first_chunk["media_type"] == "audio/wav"
-    assert base64.b64decode(first_chunk["audio_base64"]) == wav_bytes()
+    assert base64.b64decode(first_chunk["delta"]) == wav_bytes()
     assert events[2][1] == {"chunks": 2}
 
 
-def test_audio_speech_stream_chunks_supports_punctuation_chunking_enabled() -> None:
+def test_audio_speech_sse_stream_supports_punctuation_chunking_enabled() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
-        "/v1/audio/speech/stream-chunks",
+        "/v1/audio/speech",
         headers={"accept": "text/event-stream"},
         json={
             "model": "irodori-tts-mlx",
@@ -1726,6 +1727,7 @@ def test_audio_speech_stream_chunks_supports_punctuation_chunking_enabled() -> N
             ),
             "voice": "voicedesign",
             "response_format": "wav",
+            "stream_format": "sse",
             "irodori": {
                 "no_ref": True,
                 "chunking_enabled": True,
@@ -1742,28 +1744,25 @@ def test_audio_speech_stream_chunks_supports_punctuation_chunking_enabled() -> N
     ]
     events = sse_events(response.text)
     assert [event for event, _data in events] == [
-        "audio_chunk",
-        "audio_chunk",
-        "audio_chunk",
-        "done",
+        "audio.delta",
+        "audio.delta",
+        "audio.delta",
+        "audio.done",
     ]
-    assert [data["text"] for _event, data in events[:3]] == [
-        "こんにちは。",
-        "これは stream chunks の動作確認です。",
-        "最初の音声が返ったら、続きの音声を生成しながら再生できます。",
-    ]
+    assert [data["index"] for _event, data in events[:3]] == [0, 1, 2]
 
 
-def test_audio_speech_stream_chunks_supports_first_sentence_comma_chunking() -> None:
+def test_audio_speech_sse_stream_supports_first_sentence_comma_chunking() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
-        "/v1/audio/speech/stream-chunks",
+        "/v1/audio/speech",
         headers={"accept": "text/event-stream"},
         json={
             "model": "irodori-tts-mlx",
             "input": "最初は速く、すぐ返します。次は長くて、通常のままです。",
             "voice": "voicedesign",
             "response_format": "wav",
+            "stream_format": "sse",
             "irodori": {
                 "no_ref": True,
                 "chunking_enabled": True,
@@ -1781,28 +1780,25 @@ def test_audio_speech_stream_chunks_supports_first_sentence_comma_chunking() -> 
     ]
     events = sse_events(response.text)
     assert [event for event, _data in events] == [
-        "audio_chunk",
-        "audio_chunk",
-        "audio_chunk",
-        "done",
+        "audio.delta",
+        "audio.delta",
+        "audio.delta",
+        "audio.done",
     ]
-    assert [data["text"] for _event, data in events[:3]] == [
-        "最初は速く、",
-        "すぐ返します。",
-        "次は長くて、通常のままです。",
-    ]
+    assert [data["index"] for _event, data in events[:3]] == [0, 1, 2]
 
 
-def test_audio_speech_stream_chunks_rejects_invalid_first_sentence_comma_chunking() -> None:
+def test_audio_speech_sse_stream_rejects_invalid_first_sentence_comma_chunking() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
-        "/v1/audio/speech/stream-chunks",
+        "/v1/audio/speech",
         headers={"accept": "text/event-stream"},
         json={
             "model": "irodori-tts-mlx",
             "input": "こんにちは、テストです。",
             "voice": "voicedesign",
             "response_format": "wav",
+            "stream_format": "sse",
             "irodori": {
                 "no_ref": True,
                 "punctuation_chunking_enabled": True,
@@ -1818,16 +1814,17 @@ def test_audio_speech_stream_chunks_rejects_invalid_first_sentence_comma_chunkin
     assert runtime.requests == []
 
 
-def test_audio_speech_stream_chunks_rejects_unsupported_punctuation_chunk_mode() -> None:
+def test_audio_speech_sse_stream_rejects_unsupported_punctuation_chunk_mode() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
-        "/v1/audio/speech/stream-chunks",
+        "/v1/audio/speech",
         headers={"accept": "text/event-stream"},
         json={
             "model": "irodori-tts-mlx",
             "input": "こんにちは。互換性テストです。",
             "voice": "voicedesign",
             "response_format": "wav",
+            "stream_format": "sse",
             "irodori": {
                 "no_ref": True,
                 "chunking_enabled": True,
@@ -1846,7 +1843,7 @@ def test_audio_speech_stream_chunks_rejects_unsupported_punctuation_chunk_mode()
 def test_audio_speech_rejects_unsupported_chunk_size_options() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
-        "/v1/audio/speech/stream-chunks",
+        "/v1/audio/speech",
         json={
             "model": "irodori-tts-mlx",
             "input": "こんにちは。互換性テストです。",
@@ -1868,15 +1865,16 @@ def test_audio_speech_rejects_unsupported_chunk_size_options() -> None:
     assert runtime.requests == []
 
 
-def test_audio_speech_stream_chunks_respects_disabled_chunking() -> None:
+def test_audio_speech_sse_stream_respects_disabled_chunking() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
-        "/v1/audio/speech/stream-chunks",
+        "/v1/audio/speech",
         json={
             "model": "irodori-tts-mlx",
             "input": "hello. goodbye.",
             "voice": "voicedesign",
             "response_format": "wav",
+            "stream_format": "sse",
             "irodori": {
                 "no_ref": True,
                 "chunking_enabled": False,
@@ -1887,8 +1885,8 @@ def test_audio_speech_stream_chunks_respects_disabled_chunking() -> None:
     assert response.status_code == 200
     assert [request.input for request in runtime.requests] == ["hello. goodbye."]
     events = sse_events(response.text)
-    assert [event for event, _data in events] == ["audio_chunk", "done"]
-    assert events[0][1]["text"] == "hello. goodbye."
+    assert [event for event, _data in events] == ["audio.delta", "audio.done"]
+    assert events[0][1]["index"] == 0
     assert events[1][1] == {"chunks": 1}
 
 
@@ -1926,8 +1924,9 @@ def test_audio_speech_offloads_generation_and_conversion_to_threadpool(monkeypat
     assert calls[1][0] == app_module.convert_audio_response
 
 
-def test_audio_speech_rejects_streaming_requests() -> None:
-    response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
+def test_audio_speech_streams_audio_bytes_with_stream_true() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech",
         json={
             "model": "irodori-tts-mlx",
@@ -1938,33 +1937,32 @@ def test_audio_speech_rejects_streaming_requests() -> None:
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["error"] == {
-        "message": "Streaming audio responses and SSE are not supported; request complete audio bytes.",
-        "type": "invalid_request_error",
-        "param": "stream",
-        "code": "unsupported_streaming",
-    }
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == wav_bytes()
+    assert len(runtime.requests) == 1
 
 
-def test_audio_speech_rejects_upstream_stream_format() -> None:
-    response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
+def test_audio_speech_streams_audio_bytes_with_audio_stream_format() -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech",
         json={
             "model": "irodori-tts-mlx",
             "input": "hello",
             "voice": "alloy",
             "response_format": "wav",
-            "stream_format": "sse",
+            "stream_format": "audio",
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["param"] == "stream_format"
-    assert response.json()["error"]["code"] == "unsupported_streaming"
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content == wav_bytes()
+    assert len(runtime.requests) == 1
 
 
-def test_audio_speech_rejects_sse_accept_header() -> None:
+def test_audio_speech_accepts_sse_accept_header() -> None:
     response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
         "/v1/audio/speech",
         headers={"accept": "text/event-stream"},
@@ -1976,8 +1974,43 @@ def test_audio_speech_rejects_sse_accept_header() -> None:
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "unsupported_streaming"
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert [event for event, _data in sse_events(response.text)] == [
+        "audio.delta",
+        "audio.done",
+    ]
+
+
+def test_audio_speech_rejects_unknown_stream_format() -> None:
+    response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+            "stream_format": "events",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+    assert response.json()["error"]["message"] == "Input should be 'audio' or 'sse'"
+
+
+def test_audio_speech_stream_chunks_route_is_removed() -> None:
+    response = TestClient(create_app(runtime=MockSpeechRuntime())).post(
+        "/v1/audio/speech/stream-chunks",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "hello",
+            "voice": "alloy",
+            "response_format": "wav",
+        },
+    )
+
+    assert response.status_code == 404
 
 
 def test_audio_speech_rejects_unknown_model() -> None:

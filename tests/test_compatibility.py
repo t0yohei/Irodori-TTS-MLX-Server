@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from openai import AuthenticationError, BadRequestError, OpenAI
+from openai import AuthenticationError, OpenAI
 
 from irodori_tts_mlx_server import create_app
 from irodori_tts_mlx_server.config import ServerConfig
@@ -119,23 +119,29 @@ def test_openai_python_client_downloads_non_streaming_speech(tmp_path: Path) -> 
     ]
 
 
-def test_openai_python_client_rejects_unsupported_synthesis_streaming() -> None:
+def test_openai_python_client_downloads_audio_stream_response() -> None:
     runtime = CompatibilityRuntime()
     client = openai_client(runtime)
 
-    with pytest.raises(BadRequestError) as exc_info:
-        client.audio.speech.create(
-            model="irodori-tts-mlx",
-            voice="voicedesign",
-            input="Streaming synthesis is intentionally unsupported.",
-            response_format="wav",
-            extra_body={"stream": True},
-        )
+    response = client.audio.speech.create(
+        model="irodori-tts-mlx",
+        voice="voicedesign",
+        input="Streaming synthesis is OpenAI-compatible.",
+        response_format="wav",
+        extra_body={"stream": True, "irodori": {"no_ref": True}},
+    )
 
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.code == "unsupported_streaming"
-    assert exc_info.value.param == "stream"
-    assert runtime.requests == []
+    assert response.content == wav_bytes()
+    assert runtime.requests == [
+        SpeechGenerationRequest(
+            model="irodori-tts-mlx",
+            input="Streaming synthesis is OpenAI-compatible.",
+            voice="voicedesign",
+            response_format="wav",
+            speed=1.0,
+            irodori={"no_ref": True},
+        )
+    ]
 
 
 def test_openai_python_client_receives_converted_pcm_response() -> None:
@@ -201,8 +207,6 @@ def test_supported_upstream_style_request_fixture_is_forwarded_to_runtime() -> N
 @pytest.mark.parametrize(
     ("payload_patch", "status_code", "param", "code"),
     [
-        ({"stream_format": "sse"}, 400, "stream_format", "unsupported_streaming"),
-        ({"stream": True}, 400, "stream", "unsupported_streaming"),
         (
             {"irodori": {"no_ref": True, "num_steps": 0}},
             400,

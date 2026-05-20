@@ -11,9 +11,7 @@ Irodori-TTS-MLX で実装・検証済みの機能に絞った Apple Silicon 向�
 
 - `GET /health`
 - `GET /v1/models`
-- `POST /v1/audio/speech`
-- Irodori 固有の chunk-level Server-Sent Events 用
-  `POST /v1/audio/speech/stream-chunks`
+- `POST /v1/audio/speech`（非 streaming、音声 byte streaming、Server-Sent Events）
 - `/v1/audio/voices` 配下の `GET`, `POST`, `GET by id`, `PUT`, `DELETE`
 
 モデル重みを設定しなくてもパッケージは import できます。その場合、`/health` は
@@ -26,8 +24,7 @@ Irodori-TTS-MLX で実装・検証済みの機能に絞った Apple Silicon 向�
 - [docs/real_model_setup.md](docs/real_model_setup.md): 初回セットアップ、変換済み
   weights layout、ローカル起動、speech smoke、よくあるエラー。
 - [docs/openai_client_examples.md](docs/openai_client_examples.md): `curl` と Python
-  OpenAI client の例、bearer auth、FFmpeg 形式、OpenAI speech streaming 非対応の扱い、
-  Irodori 固有の chunk-level SSE extension。
+  OpenAI client の例、bearer auth、FFmpeg 形式、音声 byte streaming、SSE speech streaming。
 - [docs/deployment.md](docs/deployment.md): Apple Silicon ローカル運用、launchd、
   bearer auth、queue、health check、ログ、環境変数。
 - [docs/upstream_compatibility.md](docs/upstream_compatibility.md): upstream server
@@ -116,8 +113,8 @@ curl http://127.0.0.1:8000/v1/audio/speech \
 
 `wav` と `pcm` は追加エンコーダなしで使えます。`mp3`, `flac`, `opus`, `aac` は
 サーバーホストに FFmpeg が必要です。OpenAI 互換の `/v1/audio/speech` route は
-synthesis streaming を行いません。`stream=true`, `stream_format`,
-`Accept: text/event-stream` を送ると `unsupported_streaming` エラーを返します。
+`stream_format="audio"` で音声 byte streaming、`stream_format="sse"` または
+`Accept: text/event-stream` で Server-Sent Events を返します。
 
 よく使う `irodori` option は `no_ref`, `caption`, `preset`, `seconds`,
 `duration_scale`, `num_steps`, `seed`, `chunking_enabled`,
@@ -131,7 +128,7 @@ runtime に短文向け auto-duration cap も渡します。
 chunking には `chunking_enabled`, `punctuation_chunking_enabled`,
 `first_sentence_comma_chunking_enabled`, `chunk_min_chars` を使ってください。
 `first_sentence_comma_chunking_enabled=true` は punctuation chunking と併用し、
-最初の1文だけ `、` などの読点で分割します。最初の `/stream-chunks` 音声 event
+最初の1文だけ `、` などの読点で分割します。最初の SSE 音声 event
 を早く返したい場合の opt-in です。
 管理対象 reference voice の短文リクエストで `fast` または `ultra-fast` を使い、
 `seconds` と `duration_scale` を省略し `speed=1.0` のままにした場合、サーバーは
@@ -139,30 +136,29 @@ chunking には `chunking_enabled`, `punctuation_chunking_enabled`,
 過生成を避けるための挙動で、長文や明示的な duration 指定は末尾切れを避けるため
 変更しません。
 
-低遅延に再生を始めたい用途向けに、Irodori 固有 extension として
-`POST /v1/audio/speech/stream-chunks` も提供します。同じ speech request 形式と
-chunking 設定を使い、生成済みのテキスト chunk ごとに `audio_chunk` event、最後に
-`done` event を Server-Sent Events で返します。
+低遅延に再生を始めたい用途向けに、`POST /v1/audio/speech` は OpenAI-style の
+Server-Sent Events も提供します。同じ speech request 形式と chunking 設定を使い、
+生成済みのテキスト chunk ごとに `audio.delta` event、最後に `audio.done` event を
+返します。
 
 ```bash
-curl -N http://127.0.0.1:8000/v1/audio/speech/stream-chunks \
+curl -N http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","irodori":{"no_ref":true,"caption":"落ち着いた明瞭なナレーション","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"落ち着いた明瞭なナレーション","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
 ```
 
 ```text
-event: audio_chunk
-data: {"index":0,"text":"最初の文です。","format":"wav","media_type":"audio/wav","audio_base64":"..."}
+event: audio.delta
+data: {"index":0,"response_format":"wav","media_type":"audio/wav","delta":"..."}
 
-event: done
+event: audio.done
 data: {"chunks":1}
 ```
 
-`audio_base64` には chunk 単位の完全な音声ファイルが入ります。client は各
-`audio_chunk` を decode して再生 queue に積みながら、後続 chunk の生成を待てます。
-この endpoint は OpenAI speech API の互換 contract ではなく、この server の追加機能です。
+`delta` には chunk 単位の base64 encoded 音声が入ります。client は各
+`audio.delta` を decode して再生 queue に積みながら、後続 chunk の生成を待てます。
 
 ## 管理対象 reference voice
 
