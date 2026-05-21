@@ -622,7 +622,7 @@ def _split_text_by_punctuation_plan(
                     hard_max_chars=hard_max_chars,
                 )
             )
-        if remaining:
+        if remaining.strip():
             chunks.extend(
                 _split_text_by_punctuation_plan(
                     remaining,

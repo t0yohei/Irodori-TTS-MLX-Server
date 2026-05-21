@@ -759,6 +759,15 @@ def test_split_text_for_generation_first_sentence_min_applies_without_terminal()
     ]
 
 
+def test_split_text_for_generation_first_sentence_min_drops_trailing_whitespace() -> None:
+    assert split_text_for_generation(
+        "hello.   ",
+        max_chars=256,
+        chunk_min_chars=80,
+        first_sentence_chunk_min_chars=1,
+    ) == ["hello."]
+
+
 def test_split_text_for_generation_punctuation_mode_hard_splits_unbroken_text() -> None:
     assert split_text_for_generation(
         "abcdefghijklmnopqrstuvwxyz",
