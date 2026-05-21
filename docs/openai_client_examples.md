@@ -162,20 +162,16 @@ curl -N http://127.0.0.1:8000/v1/audio/speech \\
       "no_ref": true,
       "caption": "clear studio narration",
       "chunking_enabled": true,
-      "punctuation_chunking_enabled": true,
       "chunk_min_chars": 80,
-      "first_sentence_comma_chunking_enabled": true
+      "first_sentence_chunk_min_chars": 1
     }
   }'
 ~~~
 
 Chunking uses punctuation boundaries by default after `chunk_min_chars`
-non-space characters; `punctuation_chunking_enabled` is accepted for
-compatibility with the same planner. Use
-`first_sentence_comma_chunking_enabled` only when you want the first audio event
-as early as possible. It splits only the first sentence on comma-like
-punctuation such as `、`; later sentences keep the normal punctuation chunk
-planner.
+non-space characters. Use `first_sentence_chunk_min_chars` only when you want
+the first audio event as early as possible. It applies a separate threshold to
+the first sentence; later sentences keep the normal punctuation chunk planner.
 
 The response uses Server-Sent Events:
 

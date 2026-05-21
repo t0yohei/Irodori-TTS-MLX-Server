@@ -241,8 +241,7 @@ Supported `irodori` runtime options include `ref_wav`, `ref_embed`, `no_ref`,
 `cfg_min_t`, `cfg_max_t`, `t_schedule_mode`, `sway_coeff`, `rescale_k`,
 `rescale_sigma`, `speaker_kv_scale`, `speaker_kv_min_t`,
 `speaker_kv_max_layers`, `max_ref_seconds`, `context_kv_cache`,
-`chunking_enabled`, `punctuation_chunking_enabled`,
-`first_sentence_comma_chunking_enabled`, `chunk_min_chars`, `tail_trim_ms`,
+`chunking_enabled`, `chunk_min_chars`, `first_sentence_chunk_min_chars`, `tail_trim_ms`,
 `tail_silence_trim_ms`, `tail_silence_keep_ms`, and `tail_silence_threshold`.
 Unsupported or ambiguous upstream options such as
 `lora_adapter`, `ref_latent`, legacy option names, and unsupported PyTorch-only controls are
@@ -270,14 +269,10 @@ When `irodori.seconds` is
 omitted, each chunk also omits `seconds` so Irodori-TTS-MLX can use its duration
 fallback or predicted-duration behavior. When `irodori.seconds` is explicit, the
 server distributes that total duration across chunks by character count.
-`irodori.punctuation_chunking_enabled` remains accepted as a compatibility flag;
-chunking uses punctuation-oriented planning by default. `chunk_min_chars`
-controls the minimum non-space characters before a punctuation boundary can
-split. Set
-`irodori.first_sentence_comma_chunking_enabled=true` with punctuation chunking
-to split only the first sentence on Japanese commas such as `、`; this can reduce
-time to the first SSE audio event while later sentences keep the
-normal punctuation planner.
+`chunk_min_chars` controls the minimum non-space characters before a punctuation
+boundary can split. Set `irodori.first_sentence_chunk_min_chars` to use a
+smaller threshold only for the first sentence; this can reduce time to the first
+SSE audio event while later sentences keep the normal punctuation planner.
 
 For lower perceived latency, `POST /v1/audio/speech` supports OpenAI-style
 Server-Sent Events. It reuses the same speech request shape and chunking
@@ -289,7 +284,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"clear studio narration","chunking_enabled":true,"punctuation_chunking_enabled":true}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"clear studio narration","chunking_enabled":true,"chunk_min_chars":80,"first_sentence_chunk_min_chars":1}}'
 ```
 
 ```text

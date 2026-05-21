@@ -1795,7 +1795,6 @@ def test_audio_speech_sse_stream_emits_each_generated_chunk_as_audio_delta() -> 
             "irodori": {
                 "no_ref": True,
                 "chunking_enabled": True,
-                "punctuation_chunking_enabled": True,
                 "chunk_min_chars": 1,
                 "seconds": 3.0,
             },
@@ -1822,7 +1821,7 @@ def test_audio_speech_sse_stream_emits_each_generated_chunk_as_audio_delta() -> 
     assert events[2][1] == speech_audio_done_payload()
 
 
-def test_audio_speech_sse_stream_supports_punctuation_chunking_enabled() -> None:
+def test_audio_speech_sse_stream_uses_punctuation_chunking_by_default() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech",
@@ -1839,7 +1838,6 @@ def test_audio_speech_sse_stream_supports_punctuation_chunking_enabled() -> None
             "irodori": {
                 "no_ref": True,
                 "chunking_enabled": True,
-                "punctuation_chunking_enabled": True,
             },
         },
     )
@@ -1860,7 +1858,7 @@ def test_audio_speech_sse_stream_supports_punctuation_chunking_enabled() -> None
     assert events[1][1] == speech_audio_done_payload()
 
 
-def test_audio_speech_sse_stream_supports_first_sentence_comma_chunking() -> None:
+def test_audio_speech_sse_stream_supports_first_sentence_chunk_min_chars() -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech",
@@ -1874,8 +1872,8 @@ def test_audio_speech_sse_stream_supports_first_sentence_comma_chunking() -> Non
             "irodori": {
                 "no_ref": True,
                 "chunking_enabled": True,
-                "punctuation_chunking_enabled": True,
-                "first_sentence_comma_chunking_enabled": True,
+                "chunk_min_chars": 80,
+                "first_sentence_chunk_min_chars": 1,
             },
         },
     )
@@ -1900,7 +1898,10 @@ def test_audio_speech_sse_stream_supports_first_sentence_comma_chunking() -> Non
     ]
 
 
-def test_audio_speech_sse_stream_rejects_invalid_first_sentence_comma_chunking() -> None:
+@pytest.mark.parametrize("value", ["quick", -1])
+def test_audio_speech_sse_stream_rejects_invalid_first_sentence_chunk_min_chars(
+    value: object,
+) -> None:
     runtime = MockSpeechRuntime()
     response = TestClient(create_app(runtime=runtime)).post(
         "/v1/audio/speech",
@@ -1913,16 +1914,42 @@ def test_audio_speech_sse_stream_rejects_invalid_first_sentence_comma_chunking()
             "stream_format": "sse",
             "irodori": {
                 "no_ref": True,
-                "punctuation_chunking_enabled": True,
-                "first_sentence_comma_chunking_enabled": "quick",
+                "first_sentence_chunk_min_chars": value,
             },
         },
     )
 
     assert response.status_code == 400
     error = response.json()["error"]
-    assert error["param"] == "irodori.first_sentence_comma_chunking_enabled"
+    assert error["param"] == "irodori.first_sentence_chunk_min_chars"
     assert error["code"] == "invalid_irodori_options"
+    assert runtime.requests == []
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["punctuation_chunking_enabled", "first_sentence_comma_chunking_enabled"],
+)
+def test_audio_speech_rejects_removed_chunking_options(option: str) -> None:
+    runtime = MockSpeechRuntime()
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/v1/audio/speech",
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "こんにちは。互換性テストです。",
+            "voice": "voicedesign",
+            "response_format": "wav",
+            "irodori": {
+                "no_ref": True,
+                option: True,
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert f"Unsupported upstream Irodori option(s): irodori.{option}." in str(
+        response.json()["error"]["message"]
+    )
     assert runtime.requests == []
 
 
@@ -1964,7 +1991,6 @@ def test_audio_speech_rejects_unsupported_chunk_size_options() -> None:
             "irodori": {
                 "no_ref": True,
                 "chunking_enabled": True,
-                "punctuation_chunking_enabled": True,
                 "chunk_hard_max_chars": 3,
             },
         },

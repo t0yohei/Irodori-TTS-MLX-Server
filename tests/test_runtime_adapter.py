@@ -706,7 +706,6 @@ def test_split_text_for_generation_punctuation_mode_merges_short_segments() -> N
         "これは短い文です。これはまだ同じチャンクに残る文です。"
         "ここまでで十分長くなったので分割されます。最後です。",
         max_chars=256,
-        chunk_mode="punctuation",
         chunk_min_chars=35,
     ) == [
         "これは短い文です。これはまだ同じチャンクに残る文です。ここまでで十分長くなったので分割されます。",
@@ -719,16 +718,15 @@ def test_split_text_for_generation_default_min_chars_keeps_short_sentences_toget
         "こんにちは。これは stream chunks の動作確認です。最初の音声が返ったら、"
         "続きの音声を生成しながら再生できます。",
         max_chars=256,
-        chunk_mode="punctuation",
     ) == ["こんにちは。これは stream chunks の動作確認です。最初の音声が返ったら、続きの音声を生成しながら再生できます。"]
 
 
-def test_split_text_for_generation_first_sentence_comma_chunking() -> None:
+def test_split_text_for_generation_uses_first_sentence_chunk_min_chars() -> None:
     assert split_text_for_generation(
         "最初は速く、すぐ返します。次は長くて、通常のままです。",
         max_chars=256,
-        chunk_mode="punctuation",
-        first_sentence_comma_chunking_enabled=True,
+        chunk_min_chars=80,
+        first_sentence_chunk_min_chars=1,
     ) == [
         "最初は速く、",
         "すぐ返します。",
@@ -736,25 +734,44 @@ def test_split_text_for_generation_first_sentence_comma_chunking() -> None:
     ]
 
 
-def test_punctuation_mode_splits_on_commas_when_min_chars_reached() -> None:
+def test_split_text_for_generation_first_sentence_min_only_applies_to_first_sentence() -> None:
     assert split_text_for_generation(
         "最初の文です。次は長くて、通常のままです。",
         max_chars=256,
-        chunk_mode="punctuation",
-        chunk_min_chars=1,
-        first_sentence_comma_chunking_enabled=True,
+        chunk_min_chars=80,
+        first_sentence_chunk_min_chars=1,
     ) == [
         "最初の文です。",
-        "次は長くて、",
-        "通常のままです。",
+        "次は長くて、通常のままです。",
     ]
+
+
+def test_split_text_for_generation_first_sentence_min_applies_without_terminal() -> None:
+    assert split_text_for_generation(
+        "one, two, three",
+        max_chars=256,
+        chunk_min_chars=80,
+        first_sentence_chunk_min_chars=1,
+    ) == [
+        "one,",
+        "two,",
+        "three",
+    ]
+
+
+def test_split_text_for_generation_first_sentence_min_drops_trailing_whitespace() -> None:
+    assert split_text_for_generation(
+        "hello.   ",
+        max_chars=256,
+        chunk_min_chars=80,
+        first_sentence_chunk_min_chars=1,
+    ) == ["hello."]
 
 
 def test_split_text_for_generation_punctuation_mode_hard_splits_unbroken_text() -> None:
     assert split_text_for_generation(
         "abcdefghijklmnopqrstuvwxyz",
         max_chars=10,
-        chunk_mode="punctuation",
     ) == [
         "abcdefghij",
         "klmnopqrst",
@@ -766,7 +783,6 @@ def test_split_text_for_generation_punctuation_mode_preserves_whitespace_only_ch
     assert split_text_for_generation(
         "      ",
         max_chars=2,
-        chunk_mode="punctuation",
     ) == ["  ", "  ", "  "]
 
 
@@ -774,7 +790,6 @@ def test_punctuation_mode_drops_boundary_whitespace_after_period() -> None:
     assert split_text_for_generation(
         "こんにちは。  次です。\n最後です。",
         max_chars=256,
-        chunk_mode="punctuation",
         chunk_min_chars=1,
     ) == ["こんにちは。", "次です。", "最後です。"]
 
@@ -783,7 +798,6 @@ def test_punctuation_mode_ignores_boundary_whitespace_for_hard_max() -> None:
     assert split_text_for_generation(
         "hello. goodbye.",
         max_chars=8,
-        chunk_mode="punctuation",
         chunk_min_chars=1,
     ) == ["hello.", "goodbye."]
 
@@ -792,7 +806,6 @@ def test_split_text_for_generation_punctuation_mode_keeps_closers_with_period() 
     assert split_text_for_generation(
         '"こんにちは。"次です。終わり。\'',
         max_chars=256,
-        chunk_mode="punctuation",
         chunk_min_chars=1,
     ) == ['"こんにちは。"', "次です。", "終わり。'"]
 
@@ -801,7 +814,6 @@ def test_split_text_for_generation_punctuation_mode_keeps_overflow_closers_attac
     assert split_text_for_generation(
         'ab。"c',
         max_chars=3,
-        chunk_mode="punctuation",
         chunk_min_chars=1,
         chunk_hard_max_chars=3,
     ) == ["ab。", '"c']
@@ -811,7 +823,6 @@ def test_split_text_for_generation_punctuation_mode_keeps_terminal_marks_with_pe
     assert split_text_for_generation(
         "こんにちは。！？次です。",
         max_chars=256,
-        chunk_mode="punctuation",
         chunk_min_chars=1,
     ) == ["こんにちは。！？", "次です。"]
 
@@ -868,7 +879,7 @@ def test_mlx_runtime_manager_distributes_explicit_seconds_across_chunks() -> Non
     assert [request.seconds for request in WaveMLXRuntime.instances[0].requests] == [2.0, 2.0]
 
 
-def test_mlx_runtime_manager_supports_punctuation_chunking_enabled() -> None:
+def test_mlx_runtime_manager_supports_first_sentence_chunk_min_chars() -> None:
     WaveMLXRuntime.instances.clear()
     manager = IrodoriMLXRuntimeManager(
         hosted_config(
@@ -890,17 +901,18 @@ def test_mlx_runtime_manager_supports_punctuation_chunking_enabled() -> None:
             speed=1.0,
             irodori={
                 "no_ref": True,
-                "punctuation_chunking_enabled": True,
-                "chunk_min_chars": 1,
+                "chunk_min_chars": 80,
+                "first_sentence_chunk_min_chars": 1,
             },
         )
     )
 
     assert [request.text for request in WaveMLXRuntime.instances[0].requests] == [
         "こんにちは。",
-        "これは stream chunks の動作確認です。",
-        "最初の音声が返ったら、",
-        "続きの音声を生成しながら再生できます。",
+        (
+            "これは stream chunks の動作確認です。"
+            "最初の音声が返ったら、続きの音声を生成しながら再生できます。"
+        ),
     ]
 
 
@@ -921,7 +933,7 @@ def test_mlx_runtime_manager_clamps_punctuation_chunks_to_text_max_length() -> N
             voice="voicedesign",
             response_format="wav",
             speed=1.0,
-            irodori={"no_ref": True, "punctuation_chunking_enabled": True},
+            irodori={"no_ref": True},
         )
     )
 
