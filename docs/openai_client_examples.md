@@ -162,7 +162,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech \\
       "no_ref": true,
       "caption": "clear studio narration",
       "chunking_enabled": true,
-      "chunk_min_chars": 80,
+      "chunk_min_chars": 40,
       "first_sentence_chunk_min_chars": 1
     }
   }'
@@ -172,6 +172,8 @@ Chunking uses punctuation boundaries by default after `chunk_min_chars`
 non-space characters. Use `first_sentence_chunk_min_chars` only when you want
 the first audio event as early as possible. It applies a separate threshold to
 the first sentence; later sentences keep the normal punctuation chunk planner.
+For SSE, `chunk_min_chars=40` is recommended to keep per-chunk generation memory
+lower.
 
 The response uses Server-Sent Events:
 

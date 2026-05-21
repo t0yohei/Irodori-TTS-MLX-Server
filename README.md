@@ -272,7 +272,9 @@ server distributes that total duration across chunks by character count.
 `chunk_min_chars` controls the minimum non-space characters before a punctuation
 boundary can split. Set `irodori.first_sentence_chunk_min_chars` to use a
 smaller threshold only for the first sentence; this can reduce time to the first
-SSE audio event while later sentences keep the normal punctuation planner.
+SSE audio event while later sentences keep the normal punctuation planner. For
+SSE, `chunk_min_chars=40` is recommended to keep per-chunk generation memory
+lower.
 
 For lower perceived latency, `POST /v1/audio/speech` supports OpenAI-style
 Server-Sent Events. It reuses the same speech request shape and chunking
@@ -284,7 +286,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"clear studio narration","chunking_enabled":true,"chunk_min_chars":80,"first_sentence_chunk_min_chars":1}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"clear studio narration","chunking_enabled":true,"chunk_min_chars":40,"first_sentence_chunk_min_chars":1}}'
 ```
 
 ```text
