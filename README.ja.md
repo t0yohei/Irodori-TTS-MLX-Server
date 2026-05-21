@@ -136,6 +136,7 @@ chunking はデフォルトで有効で、句読点または改行に到達し�
 `first_sentence_chunk_min_chars` を使ってください。
 `first_sentence_chunk_min_chars` を指定すると、最初の1文だけ小さい閾値で
 句読点分割できます。最初の SSE 音声 event を早く返したい場合の opt-in です。
+SSE では、chunk ごとの生成メモリを抑えるため `chunk_min_chars=40` を推奨します。
 管理対象 reference voice の短文リクエストで `fast` または `ultra-fast` を使い、
 `seconds` と `duration_scale` を省略し `speed=1.0` のままにした場合、サーバーは
 保守的な文字数ベースの `seconds` 推定値を自動設定します。低遅延応答で明らかな
@@ -152,7 +153,7 @@ curl -N http://127.0.0.1:8000/v1/audio/speech \
   -H 'Content-Type: application/json' \
   -H 'Accept: text/event-stream' \
   -H 'Authorization: Bearer <token>' \
-  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"落ち着いた明瞭なナレーション","chunking_enabled":true,"chunk_min_chars":80,"first_sentence_chunk_min_chars":1}}'
+  -d '{"model":"irodori-tts-mlx","input":"最初の文です。次の文です。","voice":"voicedesign","response_format":"wav","stream_format":"sse","irodori":{"no_ref":true,"caption":"落ち着いた明瞭なナレーション","chunking_enabled":true,"chunk_min_chars":40,"first_sentence_chunk_min_chars":1}}'
 ```
 
 ```text
