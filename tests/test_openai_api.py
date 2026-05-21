@@ -1898,6 +1898,51 @@ def test_audio_speech_sse_stream_supports_first_sentence_chunk_min_chars() -> No
     ]
 
 
+def test_audio_speech_sse_stream_skips_managed_voice_auto_seconds(tmp_path) -> None:
+    runtime = MockSpeechRuntime()
+    client = TestClient(create_app(runtime=runtime, config=ServerConfig(voices_dir=tmp_path)))
+    assert (
+        client.post(
+            "/v1/audio/voices",
+            files={"file": ("sample.wav", b"wav", "audio/wav")},
+            data={"voice_id": "sample"},
+        ).status_code
+        == 201
+    )
+
+    response = client.post(
+        "/v1/audio/speech",
+        headers={"accept": "text/event-stream"},
+        json={
+            "model": "irodori-tts-mlx",
+            "input": "最初の文です。次の文です。",
+            "voice": "sample",
+            "response_format": "wav",
+            "stream_format": "sse",
+            "irodori": {
+                "preset": "fast",
+                "chunking_enabled": True,
+                "chunk_min_chars": 80,
+                "first_sentence_chunk_min_chars": 1,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert [request.input for request in runtime.requests] == [
+        "最初の文です。",
+        "次の文です。",
+    ]
+    for request in runtime.requests:
+        assert "seconds" not in request.irodori
+        assert request.irodori["preset"] == "fast"
+        assert_managed_reference_options(
+            request.irodori,
+            path=str(tmp_path / "sample.wav"),
+            voice_id="sample",
+        )
+
+
 @pytest.mark.parametrize("value", ["quick", -1])
 def test_audio_speech_sse_stream_rejects_invalid_first_sentence_chunk_min_chars(
     value: object,

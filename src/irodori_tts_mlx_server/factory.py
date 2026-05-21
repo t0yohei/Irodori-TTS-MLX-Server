@@ -586,12 +586,15 @@ def _ensure_requested_response_format(response_format: str) -> None:
 
 
 def _request_irodori_options(
-    request: AudioSpeechRequest, voice_registry: VoiceRegistry
+    request: AudioSpeechRequest,
+    voice_registry: VoiceRegistry,
+    *,
+    enable_auto_seconds: bool = True,
 ) -> dict[str, Any]:
-    return _apply_short_managed_reference_auto_seconds(
-        request,
-        _apply_managed_voice_reference(request, voice_registry),
-    )
+    options = _apply_managed_voice_reference(request, voice_registry)
+    if not enable_auto_seconds:
+        return options
+    return _apply_short_managed_reference_auto_seconds(request, options)
 
 
 def _speech_generation_request(
@@ -1094,10 +1097,14 @@ def create_app(runtime: SpeechRuntime | None = None, config: ServerConfig | None
         _require_bearer_auth(server_config, api_request)
         _ensure_requested_model(speech_runtime, request.model)
         _ensure_requested_response_format(request.response_format)
-        irodori_options = _request_irodori_options(request, voice_registry)
         wants_sse = (
             request.stream_format == "sse"
             or "text/event-stream" in api_request.headers.get("accept", "")
+        )
+        irodori_options = _request_irodori_options(
+            request,
+            voice_registry,
+            enable_auto_seconds=not wants_sse,
         )
         if request.stream and not wants_sse:
             raise openai_error(
